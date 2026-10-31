@@ -1,0 +1,12 @@
+{
+  "name": "chipstack",
+  "version": "0.1.0",
+  "description": "ChipWreck: real cards, digital chips. Virtual poker chips for Texas Hold'em nights",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test test/",
+    "serve": "npx --yes serve docs"
+  },
+  "license": "MIT"
+}
