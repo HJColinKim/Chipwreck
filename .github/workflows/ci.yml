@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# No `npm ci` anywhere: the project has zero dependencies and no lockfile.
+jobs:
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `node --test "test/*.test.js"` needs the glob support added in Node 22.
+        node: ['22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  bundles:
+    name: dist/ and docs/ match src/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      # Rebuilds and fails if the committed bundles have drifted from src/.
+      # GitHub Pages serves docs/ straight from the branch, so stale output ships.
+      - run: npm run build:check
