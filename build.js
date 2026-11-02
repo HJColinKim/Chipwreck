@@ -1,6 +1,9 @@
 // Builds two single-file outputs from src/:
 //   dist/artifact.html — page fragment for publishing as a claude.ai artifact
-//   docs/index.html    — full standalone page for GitHub Pages (uses PeerJS for multiplayer)
+//   docs/index.html    — full standalone page for GitHub Pages (multiplayer relays through public MQTT brokers)
+//
+// docs/ is the Pages deploy directory, so the manifest is copied in alongside the page.
+// The icons it points at are generated separately by `npm run icons` and committed.
 const fs = require('fs');
 const path = require('path');
 const read = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
@@ -21,6 +24,10 @@ const standalone = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0d3a31">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ChipWreck">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
 <style>${reset}</style>
 </head>
 <body>
@@ -29,4 +36,5 @@ ${fragment}
 </html>
 `;
 fs.writeFileSync(path.join(__dirname, 'docs', 'index.html'), standalone);
-console.log('Built dist/artifact.html (%d KB) and docs/index.html', Math.round(fragment.length / 1024));
+fs.copyFileSync(path.join(__dirname, 'src', 'manifest.webmanifest'), path.join(__dirname, 'docs', 'manifest.webmanifest'));
+console.log('Built dist/artifact.html (%d KB), docs/index.html and docs/manifest.webmanifest', Math.round(fragment.length / 1024));

@@ -1,0 +1,16 @@
+{
+  "name": "ChipWreck",
+  "short_name": "ChipWreck",
+  "description": "Real cards, digital chips. Texas Hold'em chip tracking on your phone.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#33694c",
+  "theme_color": "#0d3a31",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

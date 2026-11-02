@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "ChipWreck: real cards, digital chips. Virtual poker chips for Texas Hold'em nights",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "node build.js",
     "build:check": "node build.js && git diff --exit-code dist docs",

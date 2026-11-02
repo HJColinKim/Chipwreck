@@ -5,8 +5,6 @@ but no chips. Everyone opens the page on their phone or laptop, joins with a 4-c
 and bets by tapping or dragging chips into their play. Cards stay physical; the app handles
 stacks, blinds, turns, pots, side pots and payouts.
 
-(The repo is still called ChipStack; the app is ChipWreck.)
-
 ## What it does
 
 - **Lobby.** Join with a code, or create a table: starting stack ($500 / $1,000 / $2,000) and
@@ -43,27 +41,41 @@ src/engine.js      pure game reducer (no DOM) — all betting rules live here
 src/transport.js   sync backends: ClaudeBackend, PeerBackend, LocalBackend
 src/app.js         UI: lobby, waiting room, table, modals (component HTML builders)
 src/shell.html     theme tokens, fonts, component styles, swirl background + CRT overlay
+src/manifest.webmanifest   web app manifest, copied into docs/ by the build
 build.js           bundles into dist/artifact.html and docs/index.html
-test/              engine unit tests (node:test) and a Playwright smoke test
+tools/make-icons.js        one-shot generator for the docs/ homescreen icons
+test/              engine + asset unit tests (node:test) and two Playwright smoke tests
 ```
+
+No dependencies and no lockfile — Node (>= 22) and a browser are the whole toolchain.
 
 ## Develop
 
 ```bash
-npm test            # engine unit tests
-npm run build       # writes dist/ and docs/
+npm test             # engine + asset unit tests
+npm run build        # writes dist/ and docs/
+npm run build:check  # rebuilds and fails if the committed bundles drifted from src/
+npm run serve        # serve docs/ locally
+npm run icons        # regenerate docs/icon-*.png (only when the icon design changes)
 python3 test/ui_smoke.py   # three simulated phones play a full hand (needs Playwright)
                            # CHIPWRECK_FONTS=<dir with @fontsource/jersey-15 + @fontsource-variable/archivo>
                            # serves the real fonts if Google Fonts is unreachable
 python3 test/net_smoke.py <deps-dir>  # 7 players over a local MQTT broker
-npm run serve       # serve docs/ locally
 ```
+
+`dist/` and `docs/` are generated but committed, because GitHub Pages serves `docs/`
+straight from the branch. Rebuild and commit them with any `src/` change — CI checks it.
+The icon PNGs are committed too, and the build never rewrites them: zlib output is not
+guaranteed byte-stable across Node versions, which would break that check.
 
 ## Deploy to GitHub Pages
 
 1. Push this repo to GitHub.
 2. Settings → Pages → Deploy from branch → `main`, folder `/docs`.
-3. Share `https://<you>.github.io/ChipStack/` (the path matches the repo name, capitals included) — add `#CODE` to pre-fill a table code.
+3. Share `https://<you>.github.io/Chipwreck/` (the path matches the repo name, capitals included) — add `#CODE` to pre-fill a table code.
+
+The page ships a manifest and icons, so phones can add it to the homescreen and run it
+without browser chrome — worth doing on the host's phone, which has to stay awake.
 
 ## Known limits (MVP)
 
@@ -71,3 +83,9 @@ npm run serve       # serve docs/ locally
 - A short all-in raise reopens betting (strict rules say it shouldn't).
 - In GitHub Pages mode, if the host's phone sleeps the table pauses until it comes back;
   the host's table is saved on their phone and resumes under the same code.
+- No offline support: there is no service worker, so a redeploy is always picked up but
+  the page needs the network (one-phone mode aside).
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
