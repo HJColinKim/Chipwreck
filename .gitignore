@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+
+# Screenshots written by test/ui_smoke.py
+test/shots/
+
+# dist/ and docs/ are deliberately committed: dist/artifact.html is the claude.ai
+# artifact payload, docs/ is the GitHub Pages deploy.
+
+.DS_Store
+Thumbs.db

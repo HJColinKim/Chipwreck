@@ -1,0 +1,7 @@
+# dist/ and docs/ are generated and committed. Without an explicit eol, a global
+# core.autocrlf=true rewrites them on every build and dirties the repo for no
+# content change — which also breaks the `build:check` bundles-in-sync check.
+* text=auto eol=lf
+
+*.png binary
+*.woff2 binary
