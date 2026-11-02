@@ -1,11 +1,14 @@
 {
-  "name": "chipstack",
+  "name": "chipwreck",
   "version": "0.1.0",
   "description": "ChipWreck: real cards, digital chips. Virtual poker chips for Texas Hold'em nights",
   "private": true,
   "scripts": {
     "build": "node build.js",
-    "test": "node --test test/",
+    "build:check": "node build.js && git diff --exit-code dist docs",
+    "icons": "node tools/make-icons.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:ui": "python3 test/ui_smoke.py",
     "serve": "npx --yes serve docs"
   },
   "license": "MIT"
