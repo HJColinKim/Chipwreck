@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+
+    // "preserve" keeps import syntax untouched, which both esbuild and Node's
+    // native type stripping need. Explicit .ts extensions keep the two agreeing.
+    "module": "preserve",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // esbuild does the emitting; tsc only ever type-checks. erasableSyntaxOnly
+    // bans enum/namespace/parameter-properties, which Node cannot strip.
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -3,11 +3,11 @@
 // them: zlib output is not guaranteed stable across Node versions, and `npm run build:check`
 // compares the committed bytes of docs/ against a fresh build.
 //
-// Draws the $100 chip from src/app.js: ink body, mustard edge stripes and inner ring,
+// Draws the $100 chip from src/app.ts: ink body, mustard edge stripes and inner ring,
 // on the felt background the app boots to.
-const fs = require('fs');
-const path = require('path');
-const zlib = require('zlib'); // zlib.crc32 requires Node >= 20.15
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib'; // zlib.crc32 requires Node >= 20.15
 
 const FELT = [0x33, 0x69, 0x4c];
 const INK = [0x14, 0x1a, 0x17];
@@ -91,7 +91,7 @@ const ICONS = [
   { file: 'icon-maskable-512.png', size: 512, chipScale: 0.60 },
 ];
 
-const outDir = path.join(__dirname, '..', 'docs');
+const outDir = path.join(import.meta.dirname, '..', 'docs');
 fs.mkdirSync(outDir, { recursive: true });
 for (const icon of ICONS) {
   const png = encodePNG(icon.size, renderRGB(icon.size, icon.chipScale));
