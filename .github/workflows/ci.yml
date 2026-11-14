@@ -5,21 +5,19 @@ on:
     branches: [main]
   pull_request:
 
-# No `npm ci` anywhere: the project has zero dependencies and no lockfile.
 jobs:
   test:
-    name: tests (node ${{ matrix.node }})
+    name: typecheck and tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # `node --test "test/*.test.js"` needs the glob support added in Node 22.
-        node: ['22.x', '24.x']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          # Node 24 runs the .ts test files directly via native type stripping,
+          # so there is no compile step before the suite.
+          node-version: '24.x'
+          cache: npm
+      - run: npm ci
       - run: npm test
 
   bundles:
@@ -30,6 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
+          cache: npm
+      - run: npm ci
       # Rebuilds and fails if the committed bundles have drifted from src/.
       # GitHub Pages serves docs/ straight from the branch, so stale output ships.
       - run: npm run build:check
