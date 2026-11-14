@@ -32,27 +32,33 @@ The page picks a sync backend at runtime:
 | Anywhere else (GitHub Pages, any static host) | Public MQTT brokers (EMQX, HiveMQ, Mosquitto) | The host's phone runs the game; messages go through all reachable brokers at once |
 | One-phone mode | Browser storage | No network needed |
 
-All backends run the same pure reducer (`src/engine.js`), so the rules are identical everywhere.
+All backends run the same pure reducer (`src/engine.ts`), so the rules are identical everywhere.
 
 ## Project layout
 
 ```
-src/engine.js      pure game reducer (no DOM) — all betting rules live here
-src/transport.js   sync backends: ClaudeBackend, PeerBackend, LocalBackend
-src/app.js         UI: lobby, waiting room, table, modals (component HTML builders)
+src/types.ts       domain types: TableState, Hand, Action union — the persisted shape
+src/engine.ts      pure game reducer (no DOM) — all betting rules live here
+src/transport.ts   sync backends: ClaudeBackend, PeerBackend, LocalBackend (all implement Backend)
+src/app.ts         UI: lobby, waiting room, table, modals (component HTML builders)
+src/externals.d.ts declarations for the claude.ai artifact host and mqtt.js
 src/shell.html     theme tokens, fonts, component styles, swirl background + CRT overlay
 src/manifest.webmanifest   web app manifest, copied into docs/ by the build
-build.js           bundles into dist/artifact.html and docs/index.html
+build.js           esbuild bundles src/app.ts into dist/artifact.html and docs/index.html
 tools/make-icons.js        one-shot generator for the docs/ homescreen icons
 test/              engine + asset unit tests (node:test) and two Playwright smoke tests
 ```
 
-No dependencies and no lockfile — Node (>= 22) and a browser are the whole toolchain.
+TypeScript throughout, with two devDependencies: esbuild (bundling) and typescript
+(checking only — `tsc` never emits). Needs Node >= 24, which runs the `.ts` test files
+directly via native type stripping, so the suite has no compile step.
 
 ## Develop
 
 ```bash
-npm test             # engine + asset unit tests
+npm ci               # once
+npm test             # typecheck, then engine + asset unit tests
+npm run typecheck    # tsc --noEmit on its own
 npm run build        # writes dist/ and docs/
 npm run build:check  # rebuilds and fails if the committed bundles drifted from src/
 npm run serve        # serve docs/ locally
@@ -65,6 +71,7 @@ python3 test/net_smoke.py <deps-dir>  # 7 players over a local MQTT broker
 
 `dist/` and `docs/` are generated but committed, because GitHub Pages serves `docs/`
 straight from the branch. Rebuild and commit them with any `src/` change — CI checks it.
+esbuild is pinned to an exact version so that check stays byte-stable.
 The icon PNGs are committed too, and the build never rewrites them: zlib output is not
 guaranteed byte-stable across Node versions, which would break that check.
 
