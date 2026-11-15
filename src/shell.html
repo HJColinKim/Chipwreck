@@ -100,6 +100,12 @@ input::placeholder { color: var(--placeholder); }
 .art { position: absolute; top: 0; width: 800px; height: 420px; }
 .art .abs { position: absolute; }
 
+/* busy indicator: the riffle scaled into a button or a line of text */
+.busy { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
+.rifspin { position: relative; flex: none; overflow: hidden; }
+.rifscale { position: absolute; left: 0; top: 0; width: 110px; height: 100px; transform-origin: 0 0; }
+.rifscale .abs { position: absolute; }
+
 /* pops */
 .pops { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .pop { position: absolute; left: 50%; font-family: var(--pixel); color: var(--mustard); text-shadow: 0 4px 0 var(--ink); white-space: nowrap; animation: cwPop .95s ease-out forwards; }

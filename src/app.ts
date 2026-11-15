@@ -71,16 +71,39 @@ function stack3D(c: ChipLike, n: number, P: ChipGeom, opts?: StackOpts): string 
   for (let i = 0; i < n; i++) out += chipHTML(c, P, (n - 1 - i) * off, opts.noLabel || i !== n - 1 ? '' : (opts.labelFn ? opts.labelFn(c) : c.label));
   return out + '</div>';
 }
-function riffleHTML(left: number, top: number): string {
-  let kids = `<div class="abs" style="left:6px;top:74px;width:100px;height:20px;border-radius:50%;background:#2A4B40"></div>`;
-  const one = (c: ChipColors, _key: string, x: number, y: number, z: number, dx: number, dy: number, delay: number): string =>
-    `<div class="abs rif" style="left:${x}px;top:${y}px;width:44px;height:26px;z-index:${z};--dx:${dx}px;--dy:${dy}px;animation:cwRiffle 2.6s cubic-bezier(.6,0,.3,1) ${delay}s infinite">${chipHTML(c, SIZE.rif, 0, '')}</div>`;
-  const red = { base: '#B8432F', stripe: '#E3C35A' }, blk = { base: '#141a17', stripe: '#E3C35A' };
+const RIF_RED: ChipColors = { base: '#B8432F', stripe: '#E3C35A' };
+const RIF_BLK: ChipColors = { base: '#141a17', stripe: '#E3C35A' };
+const RIF_W = 110, RIF_H = 100;
+/** The two interleaving stacks mid-riffle, drawn into a RIF_W x RIF_H box. */
+function rifStacksHTML(): string {
+  const P = SIZE.rif;
+  const one = (c: ChipColors, x: number, y: number, z: number, dx: number, dy: number, delay: number): string =>
+    `<div class="abs rif" style="left:${x}px;top:${y}px;width:${P.w}px;height:${P.ry + P.sideH}px;z-index:${z};--dx:${dx}px;--dy:${dy}px;animation:cwRiffle 2.6s cubic-bezier(.6,0,.3,1) ${delay}s infinite">${chipHTML(c, P, 0, '')}</div>`;
+  let kids = '';
   for (let i = 0; i < 5; i++) {
-    kids += one(red, 'l' + i, 0, 64 - i * 7, 2 * i, 25, -i * 7, i * .05);
-    kids += one(blk, 'r' + i, 50, 64 - i * 7, 2 * i + 1, -25, -(i + 1) * 7, i * .05 + .02);
+    kids += one(RIF_RED, 0, 64 - i * 7, 2 * i, 25, -i * 7, i * .05);
+    kids += one(RIF_BLK, 50, 64 - i * 7, 2 * i + 1, -25, -(i + 1) * 7, i * .05 + .02);
   }
-  return `<div class="abs" style="left:${left}px;top:${top}px;width:110px;height:100px">${kids}</div>`;
+  return kids;
+}
+function riffleHTML(left: number, top: number): string {
+  const felt = `<div class="abs" style="left:6px;top:74px;width:100px;height:20px;border-radius:50%;background:#2A4B40"></div>`;
+  return `<div class="abs" style="left:${left}px;top:${top}px;width:${RIF_W}px;height:${RIF_H}px">${felt}${rifStacksHTML()}</div>`;
+}
+/**
+ * Busy indicator: the lobby's riffling chips scaled down to sit inside a button or a line
+ * of text. Scaled rather than redrawn so the motion matches the home screen exactly.
+ * `.rif` is disabled under prefers-reduced-motion, so pass a label wherever one fits —
+ * with the chips frozen the label is all that is left saying the app is working.
+ */
+function busyHTML(label?: string, h = 34): string {
+  const s = h / RIF_H;
+  // With a label the chips are decorative; without one they are the only content left,
+  // so they have to announce themselves instead of being hidden.
+  const a11y = label ? 'aria-hidden="true"' : 'role="img" aria-label="Working"';
+  return `<span class="busy"><span class="rifspin" style="width:${Math.round(RIF_W * s)}px;height:${h}px" ${a11y}>`
+    + `<span class="rifscale" style="transform:scale(${s})">${rifStacksHTML()}</span></span>`
+    + (label ? `<span>${esc(label)}</span>` : '') + '</span>';
 }
 // DealerScene (head cropped by the frame); 'lobby' variant has red bow tie and brass studs
 function dealerSVG(variant: 'lobby' | 'table'): string {
@@ -115,6 +138,8 @@ interface UiState {
   tab: 'join' | 'create';
   code: string; name: string; stack: number; blinds: number;
   err: string; busy: boolean; homeNote: string; addName: string;
+  /** data-a of the control whose action is in flight, so only that button shows the spinner. */
+  pending: string | null;
   staged: number[]; stageKey: string; confirmFold: boolean; actFor: boolean;
   picks: string[][]; pickKey: string; split: boolean;
   sheet: 'menu' | 'player' | 'add' | null;
@@ -134,7 +159,7 @@ let S: TableState = null as unknown as TableState;
 let online = new Set<string>();
 const ui: UiState = {
   view: 'lobby', tab: 'join', code: '', name: T.store.get('chipstack:name') || '', stack: 1000, blinds: 0,
-  err: '', busy: false, homeNote: '', addName: '',
+  err: '', busy: false, homeNote: '', addName: '', pending: null,
   staged: [], stageKey: '', confirmFold: false, actFor: false,
   picks: [], pickKey: '', split: false, sheet: null, sheetPlayer: null, confirmRemove: false,
 };
@@ -193,12 +218,15 @@ function toast(msg: string, bad?: boolean): void {
   toastTimer = setTimeout(() => { el.hidden = true; }, bad ? 3600 : 2200);
 }
 
-async function send(action: ActionInput): Promise<boolean> {
+async function send(action: ActionInput, tag?: string): Promise<boolean> {
   if (ui.busy) return false;
   ui.busy = true;
+  ui.pending = tag ?? null;
+  // Nothing repainted between here and the reply, so a slow relay looked like a frozen app.
+  render();
   try { await backend!.submit(action); return true; }
   catch (e) { toast((e as Error).message, true); return false; }
-  finally { ui.busy = false; render(); }
+  finally { ui.busy = false; ui.pending = null; render(); }
 }
 
 let wakeLock: WakeLockSentinel | null = null;
@@ -381,9 +409,9 @@ function renderLobbyForm(): void {
     <div class="flabel"><span class="lbl">Blinds</span><div class="seg">${BLIND_OPTS.map((b, i) => seg(ui.blinds === i, `$${b[0]}/$${b[1]}`, 'blinds', i)).join('')}</div></div>`}
     <label class="flabel"><span class="lbl">Your name</span>
       <input id="in-name" class="field" maxlength="18" autocomplete="nickname" placeholder="What the table calls you" value="${esc(ui.name)}"></label>
-    <button id="b-submit" class="abtn submit ${ready ? 'mustard' : 'dead'}" data-a="submit" ${ui.busy ? 'disabled' : ''}>${ui.busy ? 'ONE SEC…' : ui.tab === 'join' ? 'JOIN TABLE' : 'CREATE TABLE'}</button>
+    <button id="b-submit" class="abtn submit ${ready ? 'mustard' : 'dead'}" data-a="submit" ${ui.busy ? 'disabled' : ''}>${ui.busy ? busyHTML(ui.tab === 'join' ? 'JOINING…' : 'DEALING YOU IN…', 40) : ui.tab === 'join' ? 'JOIN TABLE' : 'CREATE TABLE'}</button>
     ${ui.err ? `<div class="errpill" role="alert">${esc(ui.err)}</div>` : ''}
-    ${!net ? `<p class="note">${esc(ui.homeNote || 'Connecting…')}</p>` : ''}
+    ${!net ? `<p class="note">${ui.homeNote ? esc(ui.homeNote) : busyHTML('Connecting…', 22)}</p>` : ''}
     <div class="extras">${extras.join('')}</div>`);
 }
 function refreshSubmit(): void {
@@ -624,10 +652,13 @@ function actionsHTML(actor: string | null, viewer: string | null, staged: number
   const cc = toCall > 0 ? (vp && toCall >= vp.stack ? `ALL IN ${money(toCall)}` : `CALL ${money(toCall)}`) : 'CHECK';
   const ps = playState(actor, staged);
   const dis = !actor || ui.busy ? 'disabled' : '';
-  return `<button class="abtn linen fold ${ui.confirmFold ? 'sure' : ''}" id="b-fold" data-a="fold" ${dis}>${ui.confirmFold ? 'REALLY FOLD?' : 'FOLD'}</button>
-    <button class="abtn linen" id="b-call" data-a="checkcall" ${dis}>${cc}</button>
-    <button class="abtn linen" id="b-allin" data-a="allin" ${dis}>ALL IN</button>
-    <button class="abtn play ${ps.ok ? 'ok' : 'no'}" id="b-play" data-a="play" ${dis}>${ps.label}</button>`;
+  // These buttons are too narrow for a spinner beside their label, and the player just
+  // pressed the one that is waiting, so the spinner replaces the label outright.
+  const bz = (tag: string, label: string): string => (ui.pending === tag ? busyHTML(undefined, 30) : label);
+  return `<button class="abtn linen fold ${ui.confirmFold ? 'sure' : ''}" id="b-fold" data-a="fold" ${dis}>${bz('fold', ui.confirmFold ? 'REALLY FOLD?' : 'FOLD')}</button>
+    <button class="abtn linen" id="b-call" data-a="checkcall" ${dis}>${bz('checkcall', cc)}</button>
+    <button class="abtn linen" id="b-allin" data-a="allin" ${dis}>${bz('allin', 'ALL IN')}</button>
+    <button class="abtn play ${ps.ok ? 'ok' : 'no'}" id="b-play" data-a="play" ${dis}>${bz('play', ps.label)}</button>`;
 }
 
 // ---------------- end-of-hand modal ----------------
@@ -647,7 +678,7 @@ function overlayHTML(): string {
   } else if (res) { kicker = `HAND ${res.handNo}`; title = 'HAND OVER'; sub = 'Uncalled chips went back.'; }
   else { kicker = isLocal() ? 'ONE PHONE TABLE' : `TABLE ${S.code}`; title = 'READY TO DEAL'; sub = 'Seat order should match where people sit, clockwise. Change it from the table menu.'; }
   const btns = [];
-  btns.push(`<button class="abtn ink mgo" id="b-deal" data-a="deal" ${canDeal && !ui.busy ? '' : 'disabled'}>${canDeal ? (res ? 'DEAL NEXT HAND →' : 'DEAL HAND 1 →') : 'NEED 2 PLAYERS WITH CHIPS'}</button>`);
+  btns.push(`<button class="abtn ink mgo" id="b-deal" data-a="deal" ${canDeal && !ui.busy ? '' : 'disabled'}>${ui.pending === 'deal' ? busyHTML('DEALING…', 30) : canDeal ? (res ? 'DEAL NEXT HAND →' : 'DEAL HAND 1 →') : 'NEED 2 PLAYERS WITH CHIPS'}</button>`);
   if (me && me.stack === 0) btns.push(`<button class="abtn pine mgo" data-a="rebuy-me">REBUY ${money(S.settings.startingStack)}</button>`);
   if (!me && !isLocal()) btns.push('<button class="abtn pine mgo" data-a="sit-back">JOIN THIS TABLE</button>');
   const nextBtn = canDeal ? `<p class="msub">${esc(nameOf(S.buttonId))} has the button. Blinds go in automatically.</p>` : '';
@@ -670,14 +701,14 @@ function showdownHTML(): string {
   const multi = pots.length > 1 || ui.split;
   let body;
   if (!multi) {
-    body = `<div class="mpick">${pots[0].eligible.map((id) => `<button class="abtn ink" data-a="win1" data-id="${esc(id)}">${esc(!isLocal() && id === meId() ? 'ME' : UP(nameOf(id)))}</button>`).join('')}</div>
+    body = `<div class="mpick">${pots[0].eligible.map((id) => `<button class="abtn ink" data-a="win1" data-id="${esc(id)}" ${ui.busy ? 'disabled' : ''}>${ui.pending === 'win1:' + id ? busyHTML(undefined, 26) : esc(!isLocal() && id === meId() ? 'ME' : UP(nameOf(id)))}</button>`).join('')}</div>
       <div class="mlinks"><button class="melink" data-a="split">Split the pot</button></div>`;
   } else {
     const ready = ui.picks.length === pots.length && ui.picks.every((w) => w.length);
     body = pots.map((pot, i) => `<div class="mpot"><div class="lbl"><span>${pots.length > 1 ? (i === 0 ? 'MAIN POT' : 'SIDE POT ' + i) : 'TAP EVERY WINNER'}</span><span class="num">${money(pot.amount)}</span></div>
         <div class="mpick">${pot.eligible.map((id) => `<button class="abtn ink ${ui.picks[i] && ui.picks[i].includes(id) ? 'on' : ''}" data-a="pick" data-pot="${i}" data-id="${esc(id)}" aria-pressed="${!!(ui.picks[i] && ui.picks[i].includes(id))}">${esc(UP(nameOf(id)))}</button>`).join('')}</div></div>`).join('') +
       `${pots.length > 1 ? '<p class="msub">Someone went all in for less, so there are side pots. Only players who matched the bet can win each one. Tap two names to split.</p>' : ''}
-      <button class="abtn ink mgo" id="b-award" data-a="award" ${ready && !ui.busy ? '' : 'disabled'}>PAY ${ui.picks.some((w) => w.length > 1) || pots.length > 1 ? 'THE WINNERS' : 'THE WINNER'}</button>
+      <button class="abtn ink mgo" id="b-award" data-a="award" ${ready && !ui.busy ? '' : 'disabled'}>${ui.pending === 'award' ? busyHTML('PAYING OUT…', 30) : `PAY ${ui.picks.some((w) => w.length > 1) || pots.length > 1 ? 'THE WINNERS' : 'THE WINNER'}`}</button>
       ${pots.length === 1 ? '<div class="mlinks"><button class="melink" data-a="split">One winner</button></div>' : ''}`;
   }
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"><div class="mcard">
@@ -877,7 +908,7 @@ document.addEventListener('click', (e) => {
     case 'add-player2': addLocalPlayer('in-add2'); break;
     case 'add-sheet': ui.sheet = 'add'; render(); setTimeout(() => { const i = document.getElementById('in-add2'); if (i) i.focus(); }, 30); break;
     case 'leave': leaveToLobby(); break;
-    case 'deal': ui.view = 'table'; send({ type: 'deal' }); break;
+    case 'deal': ui.view = 'table'; send({ type: 'deal' }, 'deal'); break;
     // table
     case 'menu': ui.sheet = 'menu'; render(); break;
     case 'close-sheet': ui.sheet = null; render(); break;
@@ -890,15 +921,15 @@ document.addEventListener('click', (e) => {
       const L = E.legal(S, actor)!;
       if (L.canCheck && !ui.confirmFold) { ui.confirmFold = true; render(); break; }
       ui.confirmFold = false;
-      send({ type: 'fold', player: actor });
+      send({ type: 'fold', player: actor }, 'fold');
       break;
     }
-    case 'checkcall': if (actor) { const L = E.legal(S, actor)!; send({ type: L.canCheck ? 'check' : 'call', player: actor }); } break;
-    case 'allin': if (actor) { const L = E.legal(S, actor)!; send(L.maxTo > h!.currentBet ? { type: 'raise', to: L.maxTo, player: actor } : { type: 'call', player: actor }); } break;
+    case 'checkcall': if (actor) { const L = E.legal(S, actor)!; send({ type: L.canCheck ? 'check' : 'call', player: actor }, 'checkcall'); } break;
+    case 'allin': if (actor) { const L = E.legal(S, actor)!; send(L.maxTo > h!.currentBet ? { type: 'raise', to: L.maxTo, player: actor } : { type: 'call', player: actor }, 'allin'); } break;
     case 'play': {
       if (!actor) break;
       const ps = playState(actor, ui.staged.reduce((x, y) => x + y, 0));
-      if (ps.ok) send({ ...ps.action, player: actor } as ActionInput);
+      if (ps.ok) send({ ...ps.action, player: actor } as ActionInput, 'play');
       else if (ps.fill) {
         const L = E.legal(S, actor)!;
         const target = Math.min(L.maxTo, ps.fill);
@@ -909,7 +940,7 @@ document.addEventListener('click', (e) => {
       }
       break;
     }
-    case 'win1': send({ type: 'award', winners: [[el.dataset.id!]] }); break;
+    case 'win1': send({ type: 'award', winners: [[el.dataset.id!]] }, 'win1:' + el.dataset.id); break;
     case 'split': ui.split = !ui.split; ui.picks = (h!.pots || []).map(() => []); render(); break;
     case 'pick': {
       const i = Number(el.dataset.pot), id = el.dataset.id!;
@@ -918,7 +949,7 @@ document.addEventListener('click', (e) => {
       render();
       break;
     }
-    case 'award': send({ type: 'award', winners: ui.picks }); break;
+    case 'award': send({ type: 'award', winners: ui.picks }, 'award'); break;
     case 'rebuy-me': send({ type: 'rebuy' }); break;
     case 'sit-back': send({ type: 'join', name: ui.name || T.store.get('chipstack:name') || 'Player' }); break;
     case 'copy-code': copy(S.code); break;
