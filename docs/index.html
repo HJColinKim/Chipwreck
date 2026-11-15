@@ -66,6 +66,7 @@ input::placeholder { color: var(--placeholder); }
 @keyframes cwPop{0%{opacity:0;transform:translate(-50%,12px) scale(.6)}20%{opacity:1;transform:translate(-50%,-4px) scale(1.2)}100%{opacity:0;transform:translate(-50%,-56px) scale(1)}}
 @keyframes cwRiffle{0%,18%{transform:translate(0,0)}30%{transform:translate(calc(var(--dx) * .5),-10px)}46%,74%{transform:translate(var(--dx),var(--dy))}100%{transform:translate(0,0)}}
 @keyframes cwBob{0%,100%{transform:translateY(0) rotate(-1.5deg)}50%{transform:translateY(-6px) rotate(1.5deg)}}
+@keyframes cwStreet{0%{opacity:0;transform:translateY(10px) scale(.84)}14%{opacity:1;transform:translateY(0) scale(1.05)}24%,74%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-10px) scale(1)}}
 
 /* ---------- SwirlBackground + CRTOverlay ---------- */
 .swirl { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; background: var(--felt-dark); }
@@ -180,11 +181,21 @@ input::placeholder { color: var(--placeholder); }
 .spill { position: absolute; top: 12px; padding: 8px 12px; border-radius: 10px; font-size: 14px; z-index: 3; }
 .spill.turn { left: 12px; font-family: var(--pixel); letter-spacing: .04em; text-shadow: var(--fringe); transition: background .3s; }
 .spill.street { right: 12px; background: var(--pine); font-weight: 900; letter-spacing: .06em; }
-.slast { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: 13px; font-weight: 800; padding: 0 12px; z-index: 3; }
+.slast { margin-top: 10px; text-align: center; font-size: 13px; font-weight: 800; padding: 0 4px; min-height: 16px; }
 .potlabel { position: absolute; left: 250px; top: 306px; width: 300px; display: flex; align-items: baseline; justify-content: center; gap: 10px; }
 .potlabel b { font-size: 16px; font-weight: 900; letter-spacing: .24em; color: var(--mustard); }
 .potlabel span { font-size: 44px; line-height: 1; }
 .potpile { position: absolute; left: 200px; top: 180px; width: 400px; height: 120px; display: flex; align-items: flex-end; justify-content: center; gap: 6px; }
+/* community cards, on the felt in front of the pot */
+.board { position: absolute; left: 200px; top: 356px; width: 400px; display: flex; justify-content: center; gap: 6px; }
+.bcard, .bslot { width: 44px; height: 62px; border-radius: 5px; box-sizing: border-box; }
+.bcard { background: #B8432F; border: 4px solid #E3E7D8; box-shadow: 0 5px 0 #16291f; }
+.bslot { border: 2px dashed rgba(227,231,216,.3); }
+/* street announcement; never blocks the player to act */
+.announce { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 6; }
+.ann { text-align: center; padding: 14px 26px; border-radius: 14px; background: rgba(20,26,23,.88); box-shadow: 0 8px 0 var(--ink-deep); animation: cwStreet 1.5s ease-out forwards; }
+.ann b { display: block; font-family: var(--pixel); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--mustard); text-shadow: var(--fringe); }
+.ann span { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; letter-spacing: .04em; color: var(--linen); }
 .tplayers { grid-area: players; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .phead { display: flex; align-items: baseline; justify-content: space-between; }
 .phead small { font-size: 12px; font-weight: 800; opacity: .8; }
@@ -305,7 +316,8 @@ input::placeholder { color: var(--placeholder); }
   .submit { font-size: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .swirl i, .crt, .logo, .rif, .pop { animation: none !important; }
+  /* .ann still appears and is removed on its timer, it just does not move */
+  .swirl i, .crt, .logo, .rif, .pop, .ann { animation: none !important; }
 }
 </style>
 <div class="swirl" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="vg"></i></div>
@@ -789,6 +801,15 @@ input::placeholder { color: var(--placeholder); }
       pot: potTotal(h),
       currentBet: h.currentBet
     };
+  }
+  function boardCount(street) {
+    return street === "preflop" ? 0 : street === "flop" ? 3 : street === "turn" ? 4 : 5;
+  }
+  function streetChange(prev, next) {
+    if (!prev || !next || prev.no !== next.no) return null;
+    if (next.street === "showdown") return null;
+    if (STREETS.indexOf(next.street) <= STREETS.indexOf(prev.street)) return null;
+    return { street: next.street, hint: DEAL_HINT[next.street] };
   }
 
   // src/transport.ts
@@ -1506,6 +1527,12 @@ input::placeholder { color: var(--placeholder); }
   var tableHTML = `<div class="abs" style="left:-160px;top:170px;width:1120px;height:460px;border-radius:50%;background:#2A4B40"></div>
   <div class="abs" style="left:-142px;top:188px;width:1084px;height:424px;border-radius:50%;background:radial-gradient(ellipse at 50% 25%,#4a8a63 0%,#3B7955 45%,#336a4b 100%)"></div>
   <div class="abs" style="left:-90px;top:226px;width:980px;height:360px;border-radius:50%;border:2px solid rgba(227,195,90,.4);box-sizing:border-box"></div>`;
+  var BOARD_SLOTS = 5;
+  function boardHTML(dealt) {
+    let out = "";
+    for (let i = 0; i < BOARD_SLOTS; i++) out += `<div class="${i < dealt ? "bcard" : "bslot"}"></div>`;
+    return out;
+  }
   var avatarHTML = (color, dealer, glyph) => `<div class="avwrap"><div class="av" style="background:${color}${glyph ? ";--glyph:" + glyph : ""}"></div>${dealer ? '<div class="dbadge">D</div>' : ""}</div>`;
   var net = null;
   var netReady = null;
@@ -1636,6 +1663,7 @@ input::placeholder { color: var(--placeholder); }
     if (unsub) unsub();
     backend = b;
     let lastTurn = null;
+    let lastPos = null;
     const u1 = b.onState((s) => {
       S = s;
       if (ui.view === "auto") ui.view = s.handNo > 0 || s.hand ? "table" : "room";
@@ -1643,8 +1671,11 @@ input::placeholder { color: var(--placeholder); }
       const turn = s.hand && s.hand.toAct;
       if (turn && turn !== lastTurn && turn === meId() && !isLocal()) buzz([60, 40, 60]);
       lastTurn = turn;
+      const change = streetChange(lastPos, s.hand);
+      lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
       trackPot();
       render();
+      if (change) announceStreet(change);
     });
     const u2 = b.onOnline ? b.onOnline((set) => {
       online = set;
@@ -1903,11 +1934,13 @@ input::placeholder { color: var(--placeholder); }
           ${handsSVG}${riffleHTML(560, 322)}
           <div class="potpile" id="potPile"></div>
           <div class="potlabel" id="potLabel"></div>
+          <div class="board" id="board"></div>
         </div>
         <div class="spill turn" id="turnPill" aria-live="polite"></div>
         <div class="spill street" id="streetPill"></div>
-        <div class="slast" id="lastLine" aria-live="polite"></div>
+        <div class="announce" id="announce" aria-hidden="true"></div>
       </div>
+      <div class="slast" id="lastLine" aria-live="polite"></div>
     </section>
     <section class="tplayers" aria-label="Players">
       <div class="phead"><div class="sec">PLAYERS</div><small id="pcount"></small></div>
@@ -1949,6 +1982,7 @@ input::placeholder { color: var(--placeholder); }
     });
     patch("potPile", CHIPS.filter((c) => groups[c.v]).reverse().map((c) => stack3D(c, Math.min(groups[c.v], 7), SIZE.pot)).join(""));
     patch("potLabel", `<b>POT</b><span class="px num">${money(pot)}</span>`);
+    patch("board", h ? boardHTML(boardCount(h.street)) : "");
     let turnText, turnBg = "var(--pine)", turnInk = "var(--linen)";
     if (h && h.street === "showdown") turnText = "SHOWDOWN";
     else if (h && h.toAct) {
@@ -2212,6 +2246,17 @@ input::placeholder { color: var(--placeholder); }
     el.textContent = text;
     layer.appendChild(el);
     setTimeout(() => el.remove(), 950);
+  }
+  var STREET_MS = 1500;
+  function announceStreet(c) {
+    const layer = document.getElementById("announce");
+    if (!layer) return;
+    layer.textContent = "";
+    const el = document.createElement("div");
+    el.className = "ann";
+    el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), STREET_MS);
   }
   function addChip(v) {
     const actor = actorId();

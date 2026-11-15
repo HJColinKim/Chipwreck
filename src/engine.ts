@@ -539,4 +539,29 @@ function legal(s: TableState, id: string): LegalMoves | null {
   };
 }
 
-export { newTable, reduce, legal, computePots, potTotal, STREETS, DEAL_HINT };
+/** How many community cards are face up on the felt once a street is reached. */
+function boardCount(street: Street): number {
+  return street === 'preflop' ? 0 : street === 'flop' ? 3 : street === 'turn' ? 4 : 5;
+}
+
+/** Just enough of a hand to tell whether the table moved on. */
+export type StreetPos = Pick<Hand, 'no' | 'street'>;
+export interface StreetChange { street: Street; hint: string }
+
+/**
+ * What to announce when new state arrives, or null when nothing should be shown.
+ *
+ * A street only closes as a side effect of the last bet (see advance()), so clients never
+ * see an intermediate state — the change has to be derived by comparing what was on screen
+ * against what just arrived. Deliberately silent for: the first state a client sees (so a
+ * late joiner is not told to deal the flop), a different hand, no change, a step backwards
+ * (undo), and showdown, which raises its own modal.
+ */
+function streetChange(prev: StreetPos | null, next: StreetPos | null): StreetChange | null {
+  if (!prev || !next || prev.no !== next.no) return null;
+  if (next.street === 'showdown') return null;
+  if (STREETS.indexOf(next.street) <= STREETS.indexOf(prev.street)) return null;
+  return { street: next.street, hint: DEAL_HINT[next.street] };
+}
+
+export { newTable, reduce, legal, computePots, potTotal, STREETS, DEAL_HINT, boardCount, streetChange };

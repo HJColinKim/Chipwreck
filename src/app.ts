@@ -130,6 +130,17 @@ const handsSVG = `<svg class="abs" width="800" height="420" viewBox="0 0 800 420
 const tableHTML = `<div class="abs" style="left:-160px;top:170px;width:1120px;height:460px;border-radius:50%;background:#2A4B40"></div>
   <div class="abs" style="left:-142px;top:188px;width:1084px;height:424px;border-radius:50%;background:radial-gradient(ellipse at 50% 25%,#4a8a63 0%,#3B7955 45%,#336a4b 100%)"></div>
   <div class="abs" style="left:-90px;top:226px;width:980px;height:360px;border-radius:50%;border:2px solid rgba(227,195,90,.4);box-sizing:border-box"></div>`;
+/**
+ * The community cards. A slot per board card, filled in as the streets are dealt, so the
+ * street stays readable at a glance instead of only during the announcement. Cards are
+ * physical, so the app never knows their values — these are backs.
+ */
+const BOARD_SLOTS = 5;
+function boardHTML(dealt: number): string {
+  let out = '';
+  for (let i = 0; i < BOARD_SLOTS; i++) out += `<div class="${i < dealt ? 'bcard' : 'bslot'}"></div>`;
+  return out;
+}
 const avatarHTML = (color: string, dealer?: boolean, glyph?: string): string => `<div class="avwrap"><div class="av" style="background:${color}${glyph ? ';--glyph:' + glyph : ''}"></div>${dealer ? '<div class="dbadge">D</div>' : ''}</div>`;
 
 // ---------------- state ----------------
@@ -243,6 +254,8 @@ function attach(b: Backend): void {
   if (unsub) unsub();
   backend = b;
   let lastTurn: string | null = null;
+  // Starts null per table, so the first state a device sees never announces a street.
+  let lastPos: E.StreetPos | null = null;
   const u1 = b.onState((s) => {
     S = s;
     if (ui.view === 'auto') ui.view = s.handNo > 0 || s.hand ? 'table' : 'room';
@@ -250,8 +263,11 @@ function attach(b: Backend): void {
     const turn = s.hand && s.hand.toAct;
     if (turn && turn !== lastTurn && turn === meId() && !isLocal()) buzz([60, 40, 60]);
     lastTurn = turn;
+    const change = E.streetChange(lastPos, s.hand);
+    lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
     trackPot();
     render();
+    if (change) announceStreet(change);
   });
   const u2 = b.onOnline ? b.onOnline((set) => { online = set; render(); }) : () => {};
   unsub = () => { u1(); u2(); };
@@ -473,11 +489,13 @@ const tableSkeleton = () => `<main class="tbl" id="tbl">
           ${handsSVG}${riffleHTML(560, 322)}
           <div class="potpile" id="potPile"></div>
           <div class="potlabel" id="potLabel"></div>
+          <div class="board" id="board"></div>
         </div>
         <div class="spill turn" id="turnPill" aria-live="polite"></div>
         <div class="spill street" id="streetPill"></div>
-        <div class="slast" id="lastLine" aria-live="polite"></div>
+        <div class="announce" id="announce" aria-hidden="true"></div>
       </div>
+      <div class="slast" id="lastLine" aria-live="polite"></div>
     </section>
     <section class="tplayers" aria-label="Players">
       <div class="phead"><div class="sec">PLAYERS</div><small id="pcount"></small></div>
@@ -518,6 +536,7 @@ function renderTable(): void {
   const groups: Record<number, number> = {}; greedy(pot).forEach((v) => { groups[v] = (groups[v] || 0) + 1; });
   patch('potPile', CHIPS.filter((c) => groups[c.v]).reverse().map((c) => stack3D(c, Math.min(groups[c.v], 7), SIZE.pot)).join(''));
   patch('potLabel', `<b>POT</b><span class="px num">${money(pot)}</span>`);
+  patch('board', h ? boardHTML(E.boardCount(h.street)) : '');
   let turnText, turnBg = 'var(--pine)', turnInk = 'var(--linen)';
   if (h && h.street === 'showdown') turnText = 'SHOWDOWN';
   else if (h && h.toAct) {
@@ -789,6 +808,23 @@ function popAt(layerId: string, text: string, top: string, size: number): void {
   el.textContent = text;
   layer.appendChild(el);
   setTimeout(() => el.remove(), 950);
+}
+
+/**
+ * Announces a street closing. Deliberately non-blocking: it plays locally on each device
+ * with no synchronisation, so the player to act must still be able to act through it.
+ * Keep in step with the .ann animation in shell.html, as popAt does with .pop.
+ */
+const STREET_MS = 1500;
+function announceStreet(c: E.StreetChange): void {
+  const layer = document.getElementById('announce');
+  if (!layer) return;
+  layer.textContent = ''; // streets can close back to back; never stack two
+  const el = document.createElement('div');
+  el.className = 'ann';
+  el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
+  layer.appendChild(el);
+  setTimeout(() => el.remove(), STREET_MS);
 }
 
 // ---------------- chips: tap, drag in, drag out ----------------
