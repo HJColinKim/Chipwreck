@@ -222,3 +222,63 @@ test('street change fires for each street of a real hand, once each', () => {
   assert.deepEqual(seen, ['flop', 'turn', 'river']);
   assert.equal(s.hand!.street, 'showdown');
 });
+
+test('position codes count round from the button', () => {
+  const pos = (n: number): string[] => {
+    const names = 'abcdefghi'.slice(0, n).split('');
+    const s = go(table(names), names[0], 'deal');
+    const map = E.positions(s.hand!);
+    return s.hand!.seats.map((id) => map[id]);
+  };
+  // heads-up has no separate button seat: the button posts the small blind
+  assert.deepEqual(pos(2), ['SB', 'BB']);
+  assert.deepEqual(pos(3), ['BTN', 'SB', 'BB']);
+  assert.deepEqual(pos(4), ['BTN', 'SB', 'BB', 'CO']);
+  assert.deepEqual(pos(5), ['BTN', 'SB', 'BB', 'UTG', 'CO']);
+  // the hijack only appears once the table is big enough to need it
+  assert.deepEqual(pos(6), ['BTN', 'SB', 'BB', 'UTG', 'HJ', 'CO']);
+  assert.deepEqual(pos(7), ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'HJ', 'CO']);
+  assert.deepEqual(pos(8), ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'UTG+2', 'HJ', 'CO']);
+});
+
+test('position codes agree with the blinds the engine actually posted', () => {
+  for (const n of [2, 3, 4, 6]) {
+    const names = 'abcdefgh'.slice(0, n).split('');
+    const s = go(table(names), names[0], 'deal');
+    const h = s.hand!;
+    const map = E.positions(h);
+    assert.equal(map[h.sbId], 'SB', `${n}-handed small blind`);
+    assert.equal(map[h.bbId], 'BB', `${n}-handed big blind`);
+  }
+});
+
+test('position prose', () => {
+  assert.equal(E.positionName('BTN'), 'on the button');
+  assert.equal(E.positionName('CO'), 'in the cutoff');
+  assert.equal(E.positionName('UTG'), 'under the gun');
+  assert.equal(E.positionName('UTG+2'), 'under the gun +2');
+});
+
+test('street order puts the closing seat last, and counts who is left behind you', () => {
+  let s = go(table(['a', 'b', 'c', 'd']), 'a', 'deal');
+  const h = () => s.hand!;
+  // preflop the big blind closes; button is 'a', so sb=b, bb=c, first to act is d
+  assert.deepEqual(E.streetOrder(h()), ['d', 'a', 'b', 'c']);
+  assert.equal(h().toAct, 'd');
+  assert.equal(E.toActAfter(h(), 'd'), 3);
+  assert.equal(E.toActAfter(h(), 'c'), 0); // big blind acts last preflop
+
+  s = go(s, 'd', 'fold');
+  // a folded player no longer counts as acting behind you
+  assert.equal(E.toActAfter(h(), 'a'), 2);
+
+  s = go(s, 'a', 'call');
+  s = go(s, 'b', 'call');
+  s = go(s, 'c', 'check');
+  assert.equal(h().street, 'flop');
+  // postflop the button closes, so order runs from the small blind round to the button.
+  // Folded seats keep their place here; toActAfter is what filters for who can still act.
+  assert.deepEqual(E.streetOrder(h()), ['b', 'c', 'd', 'a']);
+  assert.equal(E.toActAfter(h(), 'b'), 2);
+  assert.equal(E.toActAfter(h(), 'a'), 0);
+});
