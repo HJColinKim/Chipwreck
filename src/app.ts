@@ -34,6 +34,16 @@ const CHIPS: ChipSpec[] = [
 ];
 const byV = (v: number): ChipSpec | undefined => CHIPS.find((c) => c.v === v);
 const AVATAR = ['#141a17', '#B8432F', '#2F5D73', '#839E9F', '#3B7955'];
+/**
+ * Keyed off the player id rather than their index in S.players, so a seat moving — or
+ * anyone leaving — never recolours the rest of the table. Colour is a recognition aid, and
+ * it is worthless if it changes under you. Tables past five share colours either way.
+ */
+function avatarColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR[hash % AVATAR.length];
+}
 const ROOM_COLORS = ['#E3C35A', '#B8432F', '#2F5D73', '#839E9F', '#3B7955'];
 const STREET = { preflop: 'PREFLOP', flop: 'FLOP', turn: 'TURN', river: 'RIVER', showdown: 'SHOWDOWN' };
 const STACK_OPTS = [500, 1000, 2000];
@@ -549,11 +559,13 @@ function renderTable(): void {
   patch('streetPill', h ? STREET[h.street] : 'BETWEEN HANDS');
   patch('lastLine', esc(lastLine()));
 
-  // players
-  const others = S.players.filter((p) => p.id !== viewer);
+  // players, listed clockwise from the viewer so the seat below you is the one that acts
+  // after you — S.players is the seat ring, and a flat slice of it reads as no order at all
+  const others = ringFrom(viewer);
+  const pos = h ? E.positions(h) : {};
   const live = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount();
   patch('pcount', h ? `${live} IN HAND` : `${S.players.length} SEATED`);
-  patch('seats', others.length ? others.map((p) => seatHTML(p)).join('') : `<div class="empty-seats">${isLocal() ? 'Add players from the table menu.' : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
+  patch('seats', others.length ? others.map((p) => seatHTML(p, pos[p.id])).join('') : `<div class="empty-seats">${isLocal() ? 'Add players from the table menu.' : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
 
   // tray
   const stack = vp ? vp.stack : 0;
@@ -604,9 +616,15 @@ function statusOf(p: Player): string {
   return (h.last && h.last[p.id]) || 'Waiting';
 }
 
-function seatHTML(p: Player): string {
+/** Everyone but the viewer, in seat order starting with whoever sits to the viewer's left. */
+function ringFrom(viewer: string | null): Player[] {
+  const list = S.players;
+  const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
+  return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
+}
+
+function seatHTML(p: Player, pos?: string): string {
   const h = S.hand;
-  const idx = S.players.indexOf(p);
   const inHand = h && h.seats.includes(p.id);
   const acting = h && h.toAct === p.id && h.street !== 'showdown';
   const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
@@ -616,8 +634,8 @@ function seatHTML(p: Player): string {
   let st = statusOf(p);
   if (!isLocal() && online.size && !online.has(p.id) && !acting) st += ' · away';
   return `<button class="seat ${acting || won ? 'hot' : ''} ${dim ? 'dim' : ''}" data-a="player" data-id="${esc(p.id)}">
-    ${avatarHTML(AVATAR[idx % AVATAR.length], isDealer)}
-    <div class="who"><div class="nm">${esc(p.name)}</div><div class="st">${esc(st)}</div></div>
+    ${avatarHTML(avatarColor(p.id), isDealer)}
+    <div class="who"><div class="nm">${esc(p.name)}${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div><div class="st">${esc(st)}</div></div>
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
 }
@@ -633,13 +651,23 @@ function meHTML(viewer: string | null, myTurn: boolean): string {
   const inRound = h && h.seats.includes(p.id) ? (h.bets[p.id] || 0) : 0;
   const status = myTurn ? (isMe ? 'Your turn' : isLocal() ? 'Your turn. Pass the phone after.' : `Acting for ${p.name}`) : statusOf(p);
   const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
+  // Where you are, in words. A code like CO means nothing unless you already know it, and
+  // the count is the part that actually changes a decision.
+  const pos = h && h.seats.includes(p.id) ? E.positions(h)[p.id] : '';
+  let posLine = '';
+  if (pos) {
+    const canStillAct = h!.street !== 'showdown' && !h!.folded[p.id] && !h!.allIn[p.id];
+    const after = canStillAct ? E.toActAfter(h!, p.id) : -1;
+    const tail = after < 0 ? '' : after === 0 ? ' · last to act' : ` · ${after} still to act after`;
+    posLine = `<div class="mesub">${esc((isMe ? 'You’re ' : UP(p.name) + ' is ') + E.positionName(pos) + tail)}</div>`;
+  }
   let extra = '';
   if (!isLocal() && amHost() && h && h.toAct && h.toAct !== meId() && h.street !== 'showdown') {
     extra = ui.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>'
       : `<button class="melink" data-a="act-for">Act for ${esc(nameOf(h.toAct))} (phone died?)</button>`;
   }
   return `<div class="merow">${avatarHTML('var(--ink)', isDealer, 'var(--mustard)')}
-      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? 'YOU' : esc(UP(p.name))}</div><div class="mesub">${esc(status)}</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? 'YOU' : esc(UP(p.name))}${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div><div class="mesub">${esc(status)}</div>${posLine}</div></div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <div style="font-size:11px;font-weight:900;letter-spacing:.14em;color:var(--pine)">STACK</div>
       <div class="px mestack num">${money(p.stack - (myTurn ? ui.staged.reduce((a, b) => a + b, 0) : 0))}</div>

@@ -186,6 +186,8 @@ input::placeholder { color: var(--placeholder); }
 .ann { text-align: center; padding: 14px 26px; border-radius: 14px; background: rgba(20,26,23,.88); box-shadow: 0 8px 0 var(--ink-deep); animation: cwStreet 1.5s ease-out forwards; }
 .ann b { display: block; font-family: var(--pixel); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--mustard); text-shadow: var(--fringe); }
 .ann span { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; letter-spacing: .04em; color: var(--linen); }
+/* position code chip (SB, BB, CO...), sat beside the player's name */
+.pos { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 6px; background: var(--pine); color: var(--linen); font-size: 10px; font-weight: 900; letter-spacing: .08em; vertical-align: 2px; }
 .tplayers { grid-area: players; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .phead { display: flex; align-items: baseline; justify-content: space-between; }
 .phead small { font-size: 12px; font-weight: 800; opacity: .8; }
@@ -795,6 +797,48 @@ input::placeholder { color: var(--placeholder); }
   }
   function boardCount(street) {
     return street === "preflop" ? 0 : street === "flop" ? 3 : street === "turn" ? 4 : 5;
+  }
+  var POSITION_NAMES = {
+    BTN: "on the button",
+    SB: "in the small blind",
+    BB: "in the big blind",
+    CO: "in the cutoff",
+    HJ: "in the hijack",
+    UTG: "under the gun"
+  };
+  function positionName(code) {
+    return POSITION_NAMES[code] || (code.startsWith("UTG+") ? "under the gun +" + code.slice(4) : code);
+  }
+  function positions(h) {
+    const seats = h.seats, n = seats.length;
+    const b = seats.indexOf(h.buttonId);
+    const out = {};
+    if (b < 0) return out;
+    const at = (o) => seats[(b + o) % n];
+    if (n === 2) {
+      out[at(0)] = "SB";
+      out[at(1)] = "BB";
+      return out;
+    }
+    out[at(0)] = "BTN";
+    out[at(1)] = "SB";
+    out[at(2)] = "BB";
+    for (let o = 3; o < n; o++) {
+      out[at(o)] = o === n - 1 ? "CO" : n >= 6 && o === n - 2 ? "HJ" : o === 3 ? "UTG" : "UTG+" + (o - 3);
+    }
+    return out;
+  }
+  function streetOrder(h) {
+    const last = h.street === "preflop" ? h.bbId : h.buttonId;
+    const i = h.seats.indexOf(last);
+    if (i < 0) return h.seats.slice();
+    return h.seats.slice(i + 1).concat(h.seats.slice(0, i + 1));
+  }
+  function toActAfter(h, id) {
+    const order = streetOrder(h);
+    const i = order.indexOf(id);
+    if (i < 0) return 0;
+    return order.slice(i + 1).filter((x) => !h.folded[x] && !h.allIn[x]).length;
   }
   function streetChange(prev, next) {
     if (!prev || !next || prev.no !== next.no) return null;
@@ -1437,6 +1481,11 @@ input::placeholder { color: var(--placeholder); }
   ];
   var byV = (v) => CHIPS.find((c) => c.v === v);
   var AVATAR = ["#141a17", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
+  function avatarColor(id) {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = hash * 31 + id.charCodeAt(i) >>> 0;
+    return AVATAR[hash % AVATAR.length];
+  }
   var ROOM_COLORS = ["#E3C35A", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
   var STREET = { preflop: "PREFLOP", flop: "FLOP", turn: "TURN", river: "RIVER", showdown: "SHOWDOWN" };
   var STACK_OPTS = [500, 1e3, 2e3];
@@ -1989,10 +2038,11 @@ input::placeholder { color: var(--placeholder); }
     tp.style.color = turnInk;
     patch("streetPill", h ? STREET[h.street] : "BETWEEN HANDS");
     patch("lastLine", esc(lastLine()));
-    const others = S.players.filter((p) => p.id !== viewer);
+    const others = ringFrom(viewer);
+    const pos = h ? positions(h) : {};
     const live = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount();
     patch("pcount", h ? `${live} IN HAND` : `${S.players.length} SEATED`);
-    patch("seats", others.length ? others.map((p) => seatHTML(p)).join("") : `<div class="empty-seats">${isLocal() ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
+    patch("seats", others.length ? others.map((p) => seatHTML(p, pos[p.id])).join("") : `<div class="empty-seats">${isLocal() ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
     const stack = vp ? vp.stack : 0;
     const avail = stack - staged;
     patch("avail", money(avail));
@@ -2035,9 +2085,13 @@ input::placeholder { color: var(--placeholder); }
     if (h.toAct === p.id) return "Thinking…";
     return h.last && h.last[p.id] || "Waiting";
   }
-  function seatHTML(p) {
+  function ringFrom(viewer) {
+    const list = S.players;
+    const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
+    return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
+  }
+  function seatHTML(p, pos) {
     const h = S.hand;
-    const idx = S.players.indexOf(p);
     const inHand = h && h.seats.includes(p.id);
     const acting = h && h.toAct === p.id && h.street !== "showdown";
     const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
@@ -2047,8 +2101,8 @@ input::placeholder { color: var(--placeholder); }
     let st = statusOf(p);
     if (!isLocal() && online.size && !online.has(p.id) && !acting) st += " · away";
     return `<button class="seat ${acting || won ? "hot" : ""} ${dim ? "dim" : ""}" data-a="player" data-id="${esc(p.id)}">
-    ${avatarHTML(AVATAR[idx % AVATAR.length], isDealer)}
-    <div class="who"><div class="nm">${esc(p.name)}</div><div class="st">${esc(st)}</div></div>
+    ${avatarHTML(avatarColor(p.id), isDealer)}
+    <div class="who"><div class="nm">${esc(p.name)}${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div><div class="st">${esc(st)}</div></div>
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
   }
@@ -2063,12 +2117,20 @@ input::placeholder { color: var(--placeholder); }
     const inRound = h && h.seats.includes(p.id) ? h.bets[p.id] || 0 : 0;
     const status = myTurn ? isMe ? "Your turn" : isLocal() ? "Your turn. Pass the phone after." : `Acting for ${p.name}` : statusOf(p);
     const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
+    const pos = h && h.seats.includes(p.id) ? positions(h)[p.id] : "";
+    let posLine = "";
+    if (pos) {
+      const canStillAct = h.street !== "showdown" && !h.folded[p.id] && !h.allIn[p.id];
+      const after = canStillAct ? toActAfter(h, p.id) : -1;
+      const tail = after < 0 ? "" : after === 0 ? " · last to act" : ` · ${after} still to act after`;
+      posLine = `<div class="mesub">${esc((isMe ? "You’re " : UP(p.name) + " is ") + positionName(pos) + tail)}</div>`;
+    }
     let extra = "";
     if (!isLocal() && amHost() && h && h.toAct && h.toAct !== meId() && h.street !== "showdown") {
       extra = ui.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>' : `<button class="melink" data-a="act-for">Act for ${esc(nameOf2(h.toAct))} (phone died?)</button>`;
     }
     return `<div class="merow">${avatarHTML("var(--ink)", isDealer, "var(--mustard)")}
-      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? "YOU" : esc(UP(p.name))}</div><div class="mesub">${esc(status)}</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? "YOU" : esc(UP(p.name))}${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div><div class="mesub">${esc(status)}</div>${posLine}</div></div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <div style="font-size:11px;font-weight:900;letter-spacing:.14em;color:var(--pine)">STACK</div>
       <div class="px mestack num">${money(p.stack - (myTurn ? ui.staged.reduce((a, b) => a + b, 0) : 0))}</div>

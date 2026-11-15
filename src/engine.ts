@@ -548,6 +548,66 @@ function boardCount(street: Street): number {
   return street === 'preflop' ? 0 : street === 'flop' ? 3 : street === 'turn' ? 4 : 5;
 }
 
+const POSITION_NAMES: Record<string, string> = {
+  BTN: 'on the button', SB: 'in the small blind', BB: 'in the big blind',
+  CO: 'in the cutoff', HJ: 'in the hijack', UTG: 'under the gun',
+};
+/**
+ * Prose completing "You're ___", so a player is told where they are in words they would
+ * use themselves. The preposition belongs to the position — you are *on* the button but
+ * *under* the gun — so it is carried here rather than assembled by the caller.
+ */
+function positionName(code: string): string {
+  return POSITION_NAMES[code] || (code.startsWith('UTG+') ? 'under the gun +' + code.slice(4) : code);
+}
+
+/**
+ * Position code per seat, by the usual convention of counting round from the button.
+ *
+ * Heads-up is the odd one out and matches what reduce() already does: the button posts the
+ * small blind, so there is no separate BTN seat. Short tables simply run out of names —
+ * the hijack only exists from six seats up, and everything between the blinds and the
+ * cutoff is UTG, UTG+1 and so on.
+ */
+function positions(h: Hand): Record<string, string> {
+  const seats = h.seats, n = seats.length;
+  const b = seats.indexOf(h.buttonId);
+  const out: Record<string, string> = {};
+  if (b < 0) return out;
+  const at = (o: number): string => seats[(b + o) % n];
+  if (n === 2) { out[at(0)] = 'SB'; out[at(1)] = 'BB'; return out; }
+  out[at(0)] = 'BTN'; out[at(1)] = 'SB'; out[at(2)] = 'BB';
+  for (let o = 3; o < n; o++) {
+    out[at(o)] = o === n - 1 ? 'CO' : n >= 6 && o === n - 2 ? 'HJ' : o === 3 ? 'UTG' : 'UTG+' + (o - 3);
+  }
+  return out;
+}
+
+/**
+ * Seats in the order they act this street, first to act first.
+ *
+ * Preflop the big blind closes the round; on every later street the button does. Ordering
+ * from whoever acts last and rotating makes both cases one line.
+ */
+function streetOrder(h: Hand): string[] {
+  const last = h.street === 'preflop' ? h.bbId : h.buttonId;
+  const i = h.seats.indexOf(last);
+  if (i < 0) return h.seats.slice();
+  return h.seats.slice(i + 1).concat(h.seats.slice(0, i + 1));
+}
+
+/**
+ * Players still in the hand who act after `id` this street. Folded and all-in players are
+ * excluded because they cannot act, which is what makes this worth showing: it answers
+ * "how many people are left behind me", not "how many seats are behind me".
+ */
+function toActAfter(h: Hand, id: string): number {
+  const order = streetOrder(h);
+  const i = order.indexOf(id);
+  if (i < 0) return 0;
+  return order.slice(i + 1).filter((x) => !h.folded[x] && !h.allIn[x]).length;
+}
+
 /** Just enough of a hand to tell whether the table moved on. */
 export type StreetPos = Pick<Hand, 'no' | 'street'>;
 export interface StreetChange { street: Street; hint: string }
@@ -574,4 +634,7 @@ function streetChange(prev: StreetPos | null, next: StreetPos | null): StreetCha
   return { street: next.street, hint: DEAL_HINT[next.street] };
 }
 
-export { newTable, reduce, legal, computePots, potTotal, STREETS, DEAL_HINT, boardCount, streetChange };
+export {
+  newTable, reduce, legal, computePots, potTotal, STREETS, DEAL_HINT,
+  boardCount, streetChange, positions, positionName, streetOrder, toActAfter,
+};
