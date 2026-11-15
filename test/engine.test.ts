@@ -168,3 +168,57 @@ test('tracks each player\'s last action, reset each street', () => {
   s = go(s, 'b', 'raise', { to: 20 });
   assert.equal(s.hand!.last.b, 'Bet');
 });
+
+test('board count per street', () => {
+  assert.equal(E.boardCount('preflop'), 0);
+  assert.equal(E.boardCount('flop'), 3);
+  assert.equal(E.boardCount('turn'), 4);
+  assert.equal(E.boardCount('river'), 5);
+  // the board is still fully dealt once hands are shown, including an all-in runout
+  assert.equal(E.boardCount('showdown'), 5);
+});
+
+test('street change announces only a real step forward in the same hand', () => {
+  const at = (no: number, street: string): E.StreetPos => ({ no, street } as E.StreetPos);
+
+  const flop = E.streetChange(at(1, 'preflop'), at(1, 'flop'));
+  assert.equal(flop!.street, 'flop');
+  assert.equal(flop!.hint, E.DEAL_HINT.flop);
+  assert.equal(E.streetChange(at(1, 'flop'), at(1, 'turn'))!.street, 'turn');
+  assert.equal(E.streetChange(at(1, 'turn'), at(1, 'river'))!.street, 'river');
+
+  // a client that joins mid-hand must not be told to deal the street already on the table
+  assert.equal(E.streetChange(null, at(1, 'turn')), null);
+  // no hand in progress
+  assert.equal(E.streetChange(at(1, 'river'), null), null);
+  // same street, e.g. somebody just called
+  assert.equal(E.streetChange(at(1, 'flop'), at(1, 'flop')), null);
+  // a new hand deals itself; that is not a street change
+  assert.equal(E.streetChange(at(1, 'river'), at(2, 'preflop')), null);
+  // undo steps backwards
+  assert.equal(E.streetChange(at(1, 'turn'), at(1, 'flop')), null);
+  // showdown raises its own modal, including an all-in runout straight from preflop
+  assert.equal(E.streetChange(at(1, 'river'), at(1, 'showdown')), null);
+  assert.equal(E.streetChange(at(1, 'preflop'), at(1, 'showdown')), null);
+});
+
+test('street change fires for each street of a real hand, once each', () => {
+  let s = go(table(), 'a', 'deal');
+  const seen: string[] = [];
+  let prev: E.StreetPos | null = null;
+  const observe = (st: TableState): void => {
+    const ch = E.streetChange(prev, st.hand);
+    if (ch) seen.push(ch.street);
+    prev = st.hand ? { no: st.hand.no, street: st.hand.street } : null;
+  };
+  observe(s);
+  for (const [by, type] of [['a', 'call'], ['b', 'call'], ['c', 'check']] as const) {
+    s = go(s, by, type); observe(s);
+  }
+  for (const street of ['flop', 'turn', 'river'] as const) {
+    assert.equal(s.hand!.street === street || seen.includes(street), true);
+    for (const by of ['b', 'c', 'a'] as const) { s = go(s, by, 'check'); observe(s); }
+  }
+  assert.deepEqual(seen, ['flop', 'turn', 'river']);
+  assert.equal(s.hand!.street, 'showdown');
+});
