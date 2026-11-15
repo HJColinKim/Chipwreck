@@ -187,7 +187,7 @@ input::placeholder { color: var(--placeholder); }
 .ann b { display: block; font-family: var(--pixel); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--mustard); text-shadow: var(--fringe); }
 .ann span { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; letter-spacing: .04em; color: var(--linen); }
 /* position code chip (SB, BB, CO...), sat beside the player's name */
-.pos { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 6px; background: var(--pine); color: var(--linen); font-size: 10px; font-weight: 900; letter-spacing: .08em; vertical-align: 2px; }
+.pos { display: inline-block; flex: none; margin-left: 7px; padding: 1px 6px; border-radius: 6px; background: var(--pine); color: var(--linen); font-size: 10px; font-weight: 900; letter-spacing: .08em; vertical-align: 2px; }
 .tplayers { grid-area: players; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .phead { display: flex; align-items: baseline; justify-content: space-between; }
 .phead small { font-size: 12px; font-weight: 800; opacity: .8; }
@@ -196,8 +196,15 @@ input::placeholder { color: var(--placeholder); }
 .seat.hot { background: var(--mustard); box-shadow: 0 8px 0 var(--pine-deep); }
 .seat.dim { opacity: .5; }
 .seat .av { width: 52px; height: 52px; }
-.seat .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.seat .nm { font-weight: 900; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* max-width is doing real work on both of these. Under 700px the seat turns into a centred
+   column (see the media query below), so these are sized to their content rather than
+   stretched, and min-width:0 alone cannot stop a long name pushing past the seat edge. */
+.seat .who { flex: 1; min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 3px; }
+/* The name truncates; the position chip must not. Keeping .pos outside .nm means a long
+   name ellipsises instead of shoving the chip out of the clipping box and hiding it —
+   seats are only ~110px wide on a phone, where the list is three columns. */
+.seat .nmrow { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.seat .nm { flex: 0 1 auto; min-width: 0; font-weight: 900; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seat .st, .seat .of { font-size: 12px; font-weight: 700; color: var(--pine); }
 .seat .of { font-size: 11px; }
 .seat .money { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }

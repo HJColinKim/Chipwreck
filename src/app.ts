@@ -635,7 +635,9 @@ function seatHTML(p: Player, pos?: string): string {
   if (!isLocal() && online.size && !online.has(p.id) && !acting) st += ' · away';
   return `<button class="seat ${acting || won ? 'hot' : ''} ${dim ? 'dim' : ''}" data-a="player" data-id="${esc(p.id)}">
     ${avatarHTML(avatarColor(p.id), isDealer)}
-    <div class="who"><div class="nm">${esc(p.name)}${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div><div class="st">${esc(st)}</div></div>
+    <div class="who">
+      <div class="nmrow"><div class="nm">${esc(p.name)}</div>${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div>
+      <div class="st">${esc(st)}</div></div>
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
 }

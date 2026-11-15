@@ -259,26 +259,62 @@ test('position prose', () => {
   assert.equal(E.positionName('UTG+2'), 'under the gun +2');
 });
 
-test('street order puts the closing seat last, and counts who is left behind you', () => {
+test('counts who still owes an action behind you, in an unraised orbit', () => {
   let s = go(table(['a', 'b', 'c', 'd']), 'a', 'deal');
   const h = () => s.hand!;
-  // preflop the big blind closes; button is 'a', so sb=b, bb=c, first to act is d
-  assert.deepEqual(E.streetOrder(h()), ['d', 'a', 'b', 'c']);
+  // button is 'a', so sb=b, bb=c and 'd' is first to act preflop
   assert.equal(h().toAct, 'd');
   assert.equal(E.toActAfter(h(), 'd'), 3);
-  assert.equal(E.toActAfter(h(), 'c'), 0); // big blind acts last preflop
+  assert.equal(E.toActAfter(h(), 'c'), 0); // big blind closes preflop
 
   s = go(s, 'd', 'fold');
-  // a folded player no longer counts as acting behind you
-  assert.equal(E.toActAfter(h(), 'a'), 2);
+  assert.equal(E.toActAfter(h(), 'a'), 2); // a folded player owes nothing
 
   s = go(s, 'a', 'call');
   s = go(s, 'b', 'call');
   s = go(s, 'c', 'check');
   assert.equal(h().street, 'flop');
-  // postflop the button closes, so order runs from the small blind round to the button.
-  // Folded seats keep their place here; toActAfter is what filters for who can still act.
-  assert.deepEqual(E.streetOrder(h()), ['b', 'c', 'd', 'a']);
   assert.equal(E.toActAfter(h(), 'b'), 2);
-  assert.equal(E.toActAfter(h(), 'a'), 0);
+  assert.equal(E.toActAfter(h(), 'a'), 0); // button closes postflop
+});
+
+// A raise clears h.acted, so who still owes an action stops matching who sits behind you.
+// Both of these counted wrong when this walked a static slice of the seat ring instead of
+// starting from whoever is on the clock.
+test('counts correctly once a raise has reopened the betting', () => {
+  let s = go(table(['a', 'b', 'c', 'd', 'e', 'f']), 'a', 'deal');
+  s = go(s, 'd', 'raise', { to: 30 });
+  s = go(s, 'e', 'fold');
+  s = go(s, 'f', 'fold');
+  s = go(s, 'a', 'raise', { to: 90 }); // 3-bet reopens it for c and d
+  const h = s.hand!;
+  assert.equal(h.toAct, 'b');
+  // c has only posted the small blind and d is in for 30 against 90, so both owe an action
+  assert.equal(E.toActAfter(h, 'b'), 2);
+  assert.equal(E.toActAfter(h, 'c'), 1); // just d
+  assert.equal(E.toActAfter(h, 'd'), 0); // d closes this round
+  assert.equal(E.toActAfter(h, 'e'), 0); // folded players owe nothing behind them either
+});
+
+test('a player who closed the betting is not counted as still to act', () => {
+  let s = go(table(['a', 'b', 'c']), 'a', 'deal');
+  s = go(s, 'a', 'call'); s = go(s, 'b', 'call'); s = go(s, 'c', 'check');
+  s = go(s, 'b', 'check'); s = go(s, 'c', 'check');
+  s = go(s, 'a', 'raise', { to: 50 }); // a bets the flop
+  const h = s.hand!;
+  assert.equal(h.toAct, 'b');
+  // only c is left behind b; a has already matched its own bet
+  assert.equal(E.toActAfter(h, 'b'), 1);
+  assert.equal(E.toActAfter(h, 'a'), 0);
+});
+
+test('to-act count does not apply once nobody is on the clock', () => {
+  let s = go(table(['a', 'b', 'c']), 'a', 'deal');
+  s = go(s, 'a', 'call'); s = go(s, 'b', 'call'); s = go(s, 'c', 'check');
+  for (let i = 0; i < 3; i++) { s = go(s, 'b', 'check'); s = go(s, 'c', 'check'); s = go(s, 'a', 'check'); }
+  assert.equal(s.hand!.street, 'showdown');
+  assert.equal(s.hand!.toAct, null);
+  assert.equal(E.toActAfter(s.hand!, 'b'), -1);
+  // and an id that is not seated in this hand is not "last to act"
+  assert.equal(E.toActAfter(s.hand!, 'nobody'), -1);
 });
