@@ -130,12 +130,13 @@ const handsSVG = `<svg class="abs" width="800" height="420" viewBox="0 0 800 420
 const tableHTML = `<div class="abs" style="left:-160px;top:170px;width:1120px;height:460px;border-radius:50%;background:#2A4B40"></div>
   <div class="abs" style="left:-142px;top:188px;width:1084px;height:424px;border-radius:50%;background:radial-gradient(ellipse at 50% 25%,#4a8a63 0%,#3B7955 45%,#336a4b 100%)"></div>
   <div class="abs" style="left:-90px;top:226px;width:980px;height:360px;border-radius:50%;border:2px solid rgba(227,195,90,.4);box-sizing:border-box"></div>`;
-/**
- * The community cards. A slot per board card, filled in as the streets are dealt, so the
- * street stays readable at a glance instead of only during the announcement. Cards are
- * physical, so the app never knows their values — these are backs.
- */
 const BOARD_SLOTS = 5;
+/**
+ * The community cards, drawn as backs — the cards are physical, so the app never learns
+ * their values. Persistent on purpose: the announcement only reaches whoever is looking
+ * the moment a street closes, whereas this answers "where are we?" at any point in a hand.
+ * Undealt slots stay visible so it is clear more cards are still coming.
+ */
 function boardHTML(dealt: number): string {
   let out = '';
   for (let i = 0; i < BOARD_SLOTS; i++) out += `<div class="${i < dealt ? 'bcard' : 'bslot'}"></div>`;
@@ -254,7 +255,7 @@ function attach(b: Backend): void {
   if (unsub) unsub();
   backend = b;
   let lastTurn: string | null = null;
-  // Starts null per table, so the first state a device sees never announces a street.
+  // Reset per table: a device joining mid-hand has no "before", so it announces nothing.
   let lastPos: E.StreetPos | null = null;
   const u1 = b.onState((s) => {
     S = s;
@@ -267,7 +268,7 @@ function attach(b: Backend): void {
     lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
     trackPot();
     render();
-    if (change) announceStreet(change);
+    if (change) announceStreet(change); // after render(): the first table state mounts the layer
   });
   const u2 = b.onOnline ? b.onOnline((set) => { online = set; render(); }) : () => {};
   unsub = () => { u1(); u2(); };
@@ -811,15 +812,18 @@ function popAt(layerId: string, text: string, top: string, size: number): void {
 }
 
 /**
- * Announces a street closing. Deliberately non-blocking: it plays locally on each device
- * with no synchronisation, so the player to act must still be able to act through it.
- * Keep in step with the .ann animation in shell.html, as popAt does with .pop.
+ * Deliberately non-blocking. Each device plays this on its own, with nothing keeping the
+ * devices in step, so the next player may already be acting while you are still watching
+ * it — hence pointer-events:none on .announce, and no gating of the action buttons.
+ *
+ * Tune the beat here: STREET_MS mirrors the .ann duration in shell.html, the same pairing
+ * popAt has with .pop.
  */
 const STREET_MS = 1500;
 function announceStreet(c: E.StreetChange): void {
   const layer = document.getElementById('announce');
   if (!layer) return;
-  layer.textContent = ''; // streets can close back to back; never stack two
+  layer.textContent = ''; // a quick check-through closes streets back to back; never stack two
   const el = document.createElement('div');
   el.className = 'ann';
   el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;

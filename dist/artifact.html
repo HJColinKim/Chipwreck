@@ -172,12 +172,16 @@ input::placeholder { color: var(--placeholder); }
 .potlabel b { font-size: 16px; font-weight: 900; letter-spacing: .24em; color: var(--mustard); }
 .potlabel span { font-size: 44px; line-height: 1; }
 .potpile { position: absolute; left: 200px; top: 180px; width: 400px; height: 120px; display: flex; align-items: flex-end; justify-content: center; gap: 6px; }
-/* community cards, on the felt in front of the pot */
+/* Community cards. Coordinates are artboard units like .potpile above, not screen pixels:
+   this sits inside .art, which is a fixed 800x420 board scaled to fit the stage. Kept below
+   the pot label and clear of the artboard floor, where the last-action line used to sit. */
 .board { position: absolute; left: 200px; top: 356px; width: 400px; display: flex; justify-content: center; gap: 6px; }
 .bcard, .bslot { width: 44px; height: 62px; border-radius: 5px; box-sizing: border-box; }
 .bcard { background: #B8432F; border: 4px solid #E3E7D8; box-shadow: 0 5px 0 #16291f; }
 .bslot { border: 2px dashed rgba(227,231,216,.3); }
-/* street announcement; never blocks the player to act */
+/* Street announcement. pointer-events:none is load-bearing: it covers the whole stage, and
+   the player to act has to be able to tap straight through it. 1.5s pairs with STREET_MS
+   in app.ts, which removes the element. */
 .announce { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 6; }
 .ann { text-align: center; padding: 14px 26px; border-radius: 14px; background: rgba(20,26,23,.88); box-shadow: 0 8px 0 var(--ink-deep); animation: cwStreet 1.5s ease-out forwards; }
 .ann b { display: block; font-family: var(--pixel); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--mustard); text-shadow: var(--fringe); }
@@ -302,7 +306,8 @@ input::placeholder { color: var(--placeholder); }
   .submit { font-size: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* .ann still appears and is removed on its timer, it just does not move */
+  /* .ann is still shown and still removed on its timer — it just arrives without motion,
+     so the street and the deal instruction survive with the animation off. */
   .swirl i, .crt, .logo, .rif, .pop, .ann { animation: none !important; }
 }
 </style>

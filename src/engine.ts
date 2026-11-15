@@ -539,7 +539,11 @@ function legal(s: TableState, id: string): LegalMoves | null {
   };
 }
 
-/** How many community cards are face up on the felt once a street is reached. */
+/**
+ * Community cards face up on the felt. Showdown keeps the full five: an all-in runout
+ * jumps straight there with the board still to be dealt, and the cards stay out while
+ * hands are compared.
+ */
 function boardCount(street: Street): number {
   return street === 'preflop' ? 0 : street === 'flop' ? 3 : street === 'turn' ? 4 : 5;
 }
@@ -549,13 +553,19 @@ export type StreetPos = Pick<Hand, 'no' | 'street'>;
 export interface StreetChange { street: Street; hint: string }
 
 /**
- * What to announce when new state arrives, or null when nothing should be shown.
+ * What to announce when new state arrives, or null to stay quiet.
  *
- * A street only closes as a side effect of the last bet (see advance()), so clients never
- * see an intermediate state — the change has to be derived by comparing what was on screen
- * against what just arrived. Deliberately silent for: the first state a client sees (so a
- * late joiner is not told to deal the flop), a different hand, no change, a step backwards
- * (undo), and showdown, which raises its own modal.
+ * A street closes as a side effect of the last bet (see advance()), never as a step of its
+ * own, so clients only ever receive the state *after* the change. There is no event to
+ * listen for — the move has to be spotted by comparing what was on screen with what just
+ * arrived, which is why this takes a before and an after rather than one hand.
+ *
+ * Silent in five cases, each of which would otherwise mislead:
+ *   prev === null   a device that joined mid-hand would be told to deal a street already down
+ *   different hand  a new deal is its own event, not a street closing
+ *   same street     somebody just called; the round is still open
+ *   backwards       undo rewound the hand
+ *   showdown        the showdown modal already says what to do
  */
 function streetChange(prev: StreetPos | null, next: StreetPos | null): StreetChange | null {
   if (!prev || !next || prev.no !== next.no) return null;
