@@ -34,6 +34,16 @@ const CHIPS: ChipSpec[] = [
 ];
 const byV = (v: number): ChipSpec | undefined => CHIPS.find((c) => c.v === v);
 const AVATAR = ['#141a17', '#B8432F', '#2F5D73', '#839E9F', '#3B7955'];
+/**
+ * Keyed off the player id rather than their index in S.players, so a seat moving — or
+ * anyone leaving — never recolours the rest of the table. Colour is a recognition aid, and
+ * it is worthless if it changes under you. Tables past five share colours either way.
+ */
+function avatarColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR[hash % AVATAR.length];
+}
 const ROOM_COLORS = ['#E3C35A', '#B8432F', '#2F5D73', '#839E9F', '#3B7955'];
 const STREET = { preflop: 'PREFLOP', flop: 'FLOP', turn: 'TURN', river: 'RIVER', showdown: 'SHOWDOWN' };
 const STACK_OPTS = [500, 1000, 2000];
@@ -130,6 +140,18 @@ const handsSVG = `<svg class="abs" width="800" height="420" viewBox="0 0 800 420
 const tableHTML = `<div class="abs" style="left:-160px;top:170px;width:1120px;height:460px;border-radius:50%;background:#2A4B40"></div>
   <div class="abs" style="left:-142px;top:188px;width:1084px;height:424px;border-radius:50%;background:radial-gradient(ellipse at 50% 25%,#4a8a63 0%,#3B7955 45%,#336a4b 100%)"></div>
   <div class="abs" style="left:-90px;top:226px;width:980px;height:360px;border-radius:50%;border:2px solid rgba(227,195,90,.4);box-sizing:border-box"></div>`;
+const BOARD_SLOTS = 5;
+/**
+ * The community cards, drawn as backs — the cards are physical, so the app never learns
+ * their values. Persistent on purpose: the announcement only reaches whoever is looking
+ * the moment a street closes, whereas this answers "where are we?" at any point in a hand.
+ * Undealt slots stay visible so it is clear more cards are still coming.
+ */
+function boardHTML(dealt: number): string {
+  let out = '';
+  for (let i = 0; i < BOARD_SLOTS; i++) out += `<div class="${i < dealt ? 'bcard' : 'bslot'}"></div>`;
+  return out;
+}
 const avatarHTML = (color: string, dealer?: boolean, glyph?: string): string => `<div class="avwrap"><div class="av" style="background:${color}${glyph ? ';--glyph:' + glyph : ''}"></div>${dealer ? '<div class="dbadge">D</div>' : ''}</div>`;
 
 // ---------------- state ----------------
@@ -243,6 +265,8 @@ function attach(b: Backend): void {
   if (unsub) unsub();
   backend = b;
   let lastTurn: string | null = null;
+  // Reset per table: a device joining mid-hand has no "before", so it announces nothing.
+  let lastPos: E.StreetPos | null = null;
   const u1 = b.onState((s) => {
     S = s;
     if (ui.view === 'auto') ui.view = s.handNo > 0 || s.hand ? 'table' : 'room';
@@ -250,8 +274,11 @@ function attach(b: Backend): void {
     const turn = s.hand && s.hand.toAct;
     if (turn && turn !== lastTurn && turn === meId() && !isLocal()) buzz([60, 40, 60]);
     lastTurn = turn;
+    const change = E.streetChange(lastPos, s.hand);
+    lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
     trackPot();
     render();
+    if (change) announceStreet(change); // after render(): the first table state mounts the layer
   });
   const u2 = b.onOnline ? b.onOnline((set) => { online = set; render(); }) : () => {};
   unsub = () => { u1(); u2(); };
@@ -473,11 +500,13 @@ const tableSkeleton = () => `<main class="tbl" id="tbl">
           ${handsSVG}${riffleHTML(560, 322)}
           <div class="potpile" id="potPile"></div>
           <div class="potlabel" id="potLabel"></div>
+          <div class="board" id="board"></div>
         </div>
         <div class="spill turn" id="turnPill" aria-live="polite"></div>
         <div class="spill street" id="streetPill"></div>
-        <div class="slast" id="lastLine" aria-live="polite"></div>
+        <div class="announce" id="announce" aria-hidden="true"></div>
       </div>
+      <div class="slast" id="lastLine" aria-live="polite"></div>
     </section>
     <section class="tplayers" aria-label="Players">
       <div class="phead"><div class="sec">PLAYERS</div><small id="pcount"></small></div>
@@ -518,6 +547,7 @@ function renderTable(): void {
   const groups: Record<number, number> = {}; greedy(pot).forEach((v) => { groups[v] = (groups[v] || 0) + 1; });
   patch('potPile', CHIPS.filter((c) => groups[c.v]).reverse().map((c) => stack3D(c, Math.min(groups[c.v], 7), SIZE.pot)).join(''));
   patch('potLabel', `<b>POT</b><span class="px num">${money(pot)}</span>`);
+  patch('board', h ? boardHTML(E.boardCount(h.street)) : '');
   let turnText, turnBg = 'var(--pine)', turnInk = 'var(--linen)';
   if (h && h.street === 'showdown') turnText = 'SHOWDOWN';
   else if (h && h.toAct) {
@@ -529,11 +559,13 @@ function renderTable(): void {
   patch('streetPill', h ? STREET[h.street] : 'BETWEEN HANDS');
   patch('lastLine', esc(lastLine()));
 
-  // players
-  const others = S.players.filter((p) => p.id !== viewer);
+  // players, listed clockwise from the viewer so the seat below you is the one that acts
+  // after you — S.players is the seat ring, and a flat slice of it reads as no order at all
+  const others = ringFrom(viewer);
+  const pos = h ? E.positions(h) : {};
   const live = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount();
   patch('pcount', h ? `${live} IN HAND` : `${S.players.length} SEATED`);
-  patch('seats', others.length ? others.map((p) => seatHTML(p)).join('') : `<div class="empty-seats">${isLocal() ? 'Add players from the table menu.' : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
+  patch('seats', others.length ? others.map((p) => seatHTML(p, pos[p.id])).join('') : `<div class="empty-seats">${isLocal() ? 'Add players from the table menu.' : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
 
   // tray
   const stack = vp ? vp.stack : 0;
@@ -584,9 +616,15 @@ function statusOf(p: Player): string {
   return (h.last && h.last[p.id]) || 'Waiting';
 }
 
-function seatHTML(p: Player): string {
+/** Everyone but the viewer, in seat order starting with whoever sits to the viewer's left. */
+function ringFrom(viewer: string | null): Player[] {
+  const list = S.players;
+  const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
+  return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
+}
+
+function seatHTML(p: Player, pos?: string): string {
   const h = S.hand;
-  const idx = S.players.indexOf(p);
   const inHand = h && h.seats.includes(p.id);
   const acting = h && h.toAct === p.id && h.street !== 'showdown';
   const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
@@ -596,8 +634,10 @@ function seatHTML(p: Player): string {
   let st = statusOf(p);
   if (!isLocal() && online.size && !online.has(p.id) && !acting) st += ' · away';
   return `<button class="seat ${acting || won ? 'hot' : ''} ${dim ? 'dim' : ''}" data-a="player" data-id="${esc(p.id)}">
-    ${avatarHTML(AVATAR[idx % AVATAR.length], isDealer)}
-    <div class="who"><div class="nm">${esc(p.name)}</div><div class="st">${esc(st)}</div></div>
+    ${avatarHTML(avatarColor(p.id), isDealer)}
+    <div class="who">
+      <div class="nmrow"><div class="nm">${esc(p.name)}</div>${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div>
+      <div class="st">${esc(st)}</div></div>
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
 }
@@ -613,13 +653,23 @@ function meHTML(viewer: string | null, myTurn: boolean): string {
   const inRound = h && h.seats.includes(p.id) ? (h.bets[p.id] || 0) : 0;
   const status = myTurn ? (isMe ? 'Your turn' : isLocal() ? 'Your turn. Pass the phone after.' : `Acting for ${p.name}`) : statusOf(p);
   const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
+  // Where you are, in words. A code like CO means nothing unless you already know it, and
+  // the count is the part that actually changes a decision.
+  const pos = h && h.seats.includes(p.id) ? E.positions(h)[p.id] : '';
+  let posLine = '';
+  if (pos) {
+    const canStillAct = h!.street !== 'showdown' && !h!.folded[p.id] && !h!.allIn[p.id];
+    const after = canStillAct ? E.toActAfter(h!, p.id) : -1;
+    const tail = after < 0 ? '' : after === 0 ? ' · last to act' : ` · ${after} still to act after`;
+    posLine = `<div class="mesub">${esc((isMe ? 'You’re ' : UP(p.name) + ' is ') + E.positionName(pos) + tail)}</div>`;
+  }
   let extra = '';
   if (!isLocal() && amHost() && h && h.toAct && h.toAct !== meId() && h.street !== 'showdown') {
     extra = ui.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>'
       : `<button class="melink" data-a="act-for">Act for ${esc(nameOf(h.toAct))} (phone died?)</button>`;
   }
   return `<div class="merow">${avatarHTML('var(--ink)', isDealer, 'var(--mustard)')}
-      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? 'YOU' : esc(UP(p.name))}</div><div class="mesub">${esc(status)}</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? 'YOU' : esc(UP(p.name))}${pos ? `<span class="pos">${esc(pos)}</span>` : ''}</div><div class="mesub">${esc(status)}</div>${posLine}</div></div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <div style="font-size:11px;font-weight:900;letter-spacing:.14em;color:var(--pine)">STACK</div>
       <div class="px mestack num">${money(p.stack - (myTurn ? ui.staged.reduce((a, b) => a + b, 0) : 0))}</div>
@@ -789,6 +839,26 @@ function popAt(layerId: string, text: string, top: string, size: number): void {
   el.textContent = text;
   layer.appendChild(el);
   setTimeout(() => el.remove(), 950);
+}
+
+/**
+ * Deliberately non-blocking. Each device plays this on its own, with nothing keeping the
+ * devices in step, so the next player may already be acting while you are still watching
+ * it — hence pointer-events:none on .announce, and no gating of the action buttons.
+ *
+ * Tune the beat here: STREET_MS mirrors the .ann duration in shell.html, the same pairing
+ * popAt has with .pop.
+ */
+const STREET_MS = 1500;
+function announceStreet(c: E.StreetChange): void {
+  const layer = document.getElementById('announce');
+  if (!layer) return;
+  layer.textContent = ''; // a quick check-through closes streets back to back; never stack two
+  const el = document.createElement('div');
+  el.className = 'ann';
+  el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
+  layer.appendChild(el);
+  setTimeout(() => el.remove(), STREET_MS);
 }
 
 // ---------------- chips: tap, drag in, drag out ----------------

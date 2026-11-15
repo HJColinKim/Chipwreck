@@ -168,3 +168,153 @@ test('tracks each player\'s last action, reset each street', () => {
   s = go(s, 'b', 'raise', { to: 20 });
   assert.equal(s.hand!.last.b, 'Bet');
 });
+
+test('board count per street', () => {
+  assert.equal(E.boardCount('preflop'), 0);
+  assert.equal(E.boardCount('flop'), 3);
+  assert.equal(E.boardCount('turn'), 4);
+  assert.equal(E.boardCount('river'), 5);
+  // the board is still fully dealt once hands are shown, including an all-in runout
+  assert.equal(E.boardCount('showdown'), 5);
+});
+
+test('street change announces only a real step forward in the same hand', () => {
+  const at = (no: number, street: string): E.StreetPos => ({ no, street } as E.StreetPos);
+
+  const flop = E.streetChange(at(1, 'preflop'), at(1, 'flop'));
+  assert.equal(flop!.street, 'flop');
+  assert.equal(flop!.hint, E.DEAL_HINT.flop);
+  assert.equal(E.streetChange(at(1, 'flop'), at(1, 'turn'))!.street, 'turn');
+  assert.equal(E.streetChange(at(1, 'turn'), at(1, 'river'))!.street, 'river');
+
+  // a client that joins mid-hand must not be told to deal the street already on the table
+  assert.equal(E.streetChange(null, at(1, 'turn')), null);
+  // no hand in progress
+  assert.equal(E.streetChange(at(1, 'river'), null), null);
+  // same street, e.g. somebody just called
+  assert.equal(E.streetChange(at(1, 'flop'), at(1, 'flop')), null);
+  // a new hand deals itself; that is not a street change
+  assert.equal(E.streetChange(at(1, 'river'), at(2, 'preflop')), null);
+  // undo steps backwards
+  assert.equal(E.streetChange(at(1, 'turn'), at(1, 'flop')), null);
+  // showdown raises its own modal, including an all-in runout straight from preflop
+  assert.equal(E.streetChange(at(1, 'river'), at(1, 'showdown')), null);
+  assert.equal(E.streetChange(at(1, 'preflop'), at(1, 'showdown')), null);
+});
+
+test('street change fires for each street of a real hand, once each', () => {
+  let s = go(table(), 'a', 'deal');
+  const seen: string[] = [];
+  let prev: E.StreetPos | null = null;
+  const observe = (st: TableState): void => {
+    const ch = E.streetChange(prev, st.hand);
+    if (ch) seen.push(ch.street);
+    prev = st.hand ? { no: st.hand.no, street: st.hand.street } : null;
+  };
+  observe(s);
+  for (const [by, type] of [['a', 'call'], ['b', 'call'], ['c', 'check']] as const) {
+    s = go(s, by, type); observe(s);
+  }
+  for (const street of ['flop', 'turn', 'river'] as const) {
+    assert.equal(s.hand!.street === street || seen.includes(street), true);
+    for (const by of ['b', 'c', 'a'] as const) { s = go(s, by, 'check'); observe(s); }
+  }
+  assert.deepEqual(seen, ['flop', 'turn', 'river']);
+  assert.equal(s.hand!.street, 'showdown');
+});
+
+test('position codes count round from the button', () => {
+  const pos = (n: number): string[] => {
+    const names = 'abcdefghi'.slice(0, n).split('');
+    const s = go(table(names), names[0], 'deal');
+    const map = E.positions(s.hand!);
+    return s.hand!.seats.map((id) => map[id]);
+  };
+  // heads-up has no separate button seat: the button posts the small blind
+  assert.deepEqual(pos(2), ['SB', 'BB']);
+  assert.deepEqual(pos(3), ['BTN', 'SB', 'BB']);
+  assert.deepEqual(pos(4), ['BTN', 'SB', 'BB', 'CO']);
+  assert.deepEqual(pos(5), ['BTN', 'SB', 'BB', 'UTG', 'CO']);
+  // the hijack only appears once the table is big enough to need it
+  assert.deepEqual(pos(6), ['BTN', 'SB', 'BB', 'UTG', 'HJ', 'CO']);
+  assert.deepEqual(pos(7), ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'HJ', 'CO']);
+  assert.deepEqual(pos(8), ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'UTG+2', 'HJ', 'CO']);
+});
+
+test('position codes agree with the blinds the engine actually posted', () => {
+  for (const n of [2, 3, 4, 6]) {
+    const names = 'abcdefgh'.slice(0, n).split('');
+    const s = go(table(names), names[0], 'deal');
+    const h = s.hand!;
+    const map = E.positions(h);
+    assert.equal(map[h.sbId], 'SB', `${n}-handed small blind`);
+    assert.equal(map[h.bbId], 'BB', `${n}-handed big blind`);
+  }
+});
+
+test('position prose', () => {
+  assert.equal(E.positionName('BTN'), 'on the button');
+  assert.equal(E.positionName('CO'), 'in the cutoff');
+  assert.equal(E.positionName('UTG'), 'under the gun');
+  assert.equal(E.positionName('UTG+2'), 'under the gun +2');
+});
+
+test('counts who still owes an action behind you, in an unraised orbit', () => {
+  let s = go(table(['a', 'b', 'c', 'd']), 'a', 'deal');
+  const h = () => s.hand!;
+  // button is 'a', so sb=b, bb=c and 'd' is first to act preflop
+  assert.equal(h().toAct, 'd');
+  assert.equal(E.toActAfter(h(), 'd'), 3);
+  assert.equal(E.toActAfter(h(), 'c'), 0); // big blind closes preflop
+
+  s = go(s, 'd', 'fold');
+  assert.equal(E.toActAfter(h(), 'a'), 2); // a folded player owes nothing
+
+  s = go(s, 'a', 'call');
+  s = go(s, 'b', 'call');
+  s = go(s, 'c', 'check');
+  assert.equal(h().street, 'flop');
+  assert.equal(E.toActAfter(h(), 'b'), 2);
+  assert.equal(E.toActAfter(h(), 'a'), 0); // button closes postflop
+});
+
+// A raise clears h.acted, so who still owes an action stops matching who sits behind you.
+// Both of these counted wrong when this walked a static slice of the seat ring instead of
+// starting from whoever is on the clock.
+test('counts correctly once a raise has reopened the betting', () => {
+  let s = go(table(['a', 'b', 'c', 'd', 'e', 'f']), 'a', 'deal');
+  s = go(s, 'd', 'raise', { to: 30 });
+  s = go(s, 'e', 'fold');
+  s = go(s, 'f', 'fold');
+  s = go(s, 'a', 'raise', { to: 90 }); // 3-bet reopens it for c and d
+  const h = s.hand!;
+  assert.equal(h.toAct, 'b');
+  // c has only posted the small blind and d is in for 30 against 90, so both owe an action
+  assert.equal(E.toActAfter(h, 'b'), 2);
+  assert.equal(E.toActAfter(h, 'c'), 1); // just d
+  assert.equal(E.toActAfter(h, 'd'), 0); // d closes this round
+  assert.equal(E.toActAfter(h, 'e'), 0); // folded players owe nothing behind them either
+});
+
+test('a player who closed the betting is not counted as still to act', () => {
+  let s = go(table(['a', 'b', 'c']), 'a', 'deal');
+  s = go(s, 'a', 'call'); s = go(s, 'b', 'call'); s = go(s, 'c', 'check');
+  s = go(s, 'b', 'check'); s = go(s, 'c', 'check');
+  s = go(s, 'a', 'raise', { to: 50 }); // a bets the flop
+  const h = s.hand!;
+  assert.equal(h.toAct, 'b');
+  // only c is left behind b; a has already matched its own bet
+  assert.equal(E.toActAfter(h, 'b'), 1);
+  assert.equal(E.toActAfter(h, 'a'), 0);
+});
+
+test('to-act count does not apply once nobody is on the clock', () => {
+  let s = go(table(['a', 'b', 'c']), 'a', 'deal');
+  s = go(s, 'a', 'call'); s = go(s, 'b', 'call'); s = go(s, 'c', 'check');
+  for (let i = 0; i < 3; i++) { s = go(s, 'b', 'check'); s = go(s, 'c', 'check'); s = go(s, 'a', 'check'); }
+  assert.equal(s.hand!.street, 'showdown');
+  assert.equal(s.hand!.toAct, null);
+  assert.equal(E.toActAfter(s.hand!, 'b'), -1);
+  // and an id that is not seated in this hand is not "last to act"
+  assert.equal(E.toActAfter(s.hand!, 'nobody'), -1);
+});

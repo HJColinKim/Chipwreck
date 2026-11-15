@@ -52,6 +52,7 @@ input::placeholder { color: var(--placeholder); }
 @keyframes cwPop{0%{opacity:0;transform:translate(-50%,12px) scale(.6)}20%{opacity:1;transform:translate(-50%,-4px) scale(1.2)}100%{opacity:0;transform:translate(-50%,-56px) scale(1)}}
 @keyframes cwRiffle{0%,18%{transform:translate(0,0)}30%{transform:translate(calc(var(--dx) * .5),-10px)}46%,74%{transform:translate(var(--dx),var(--dy))}100%{transform:translate(0,0)}}
 @keyframes cwBob{0%,100%{transform:translateY(0) rotate(-1.5deg)}50%{transform:translateY(-6px) rotate(1.5deg)}}
+@keyframes cwStreet{0%{opacity:0;transform:translateY(10px) scale(.84)}14%{opacity:1;transform:translateY(0) scale(1.05)}24%,74%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-10px) scale(1)}}
 
 /* ---------- SwirlBackground + CRTOverlay ---------- */
 .swirl { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; background: var(--felt-dark); }
@@ -166,11 +167,27 @@ input::placeholder { color: var(--placeholder); }
 .spill { position: absolute; top: 12px; padding: 8px 12px; border-radius: 10px; font-size: 14px; z-index: 3; }
 .spill.turn { left: 12px; font-family: var(--pixel); letter-spacing: .04em; text-shadow: var(--fringe); transition: background .3s; }
 .spill.street { right: 12px; background: var(--pine); font-weight: 900; letter-spacing: .06em; }
-.slast { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: 13px; font-weight: 800; padding: 0 12px; z-index: 3; }
+.slast { margin-top: 10px; text-align: center; font-size: 13px; font-weight: 800; padding: 0 4px; min-height: 16px; }
 .potlabel { position: absolute; left: 250px; top: 306px; width: 300px; display: flex; align-items: baseline; justify-content: center; gap: 10px; }
 .potlabel b { font-size: 16px; font-weight: 900; letter-spacing: .24em; color: var(--mustard); }
 .potlabel span { font-size: 44px; line-height: 1; }
 .potpile { position: absolute; left: 200px; top: 180px; width: 400px; height: 120px; display: flex; align-items: flex-end; justify-content: center; gap: 6px; }
+/* Community cards. Coordinates are artboard units like .potpile above, not screen pixels:
+   this sits inside .art, which is a fixed 800x420 board scaled to fit the stage. Kept below
+   the pot label and clear of the artboard floor, where the last-action line used to sit. */
+.board { position: absolute; left: 200px; top: 356px; width: 400px; display: flex; justify-content: center; gap: 6px; }
+.bcard, .bslot { width: 44px; height: 62px; border-radius: 5px; box-sizing: border-box; }
+.bcard { background: #B8432F; border: 4px solid #E3E7D8; box-shadow: 0 5px 0 #16291f; }
+.bslot { border: 2px dashed rgba(227,231,216,.3); }
+/* Street announcement. pointer-events:none is load-bearing: it covers the whole stage, and
+   the player to act has to be able to tap straight through it. 1.5s pairs with STREET_MS
+   in app.ts, which removes the element. */
+.announce { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 6; }
+.ann { text-align: center; padding: 14px 26px; border-radius: 14px; background: rgba(20,26,23,.88); box-shadow: 0 8px 0 var(--ink-deep); animation: cwStreet 1.5s ease-out forwards; }
+.ann b { display: block; font-family: var(--pixel); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: .06em; color: var(--mustard); text-shadow: var(--fringe); }
+.ann span { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; letter-spacing: .04em; color: var(--linen); }
+/* position code chip (SB, BB, CO...), sat beside the player's name */
+.pos { display: inline-block; flex: none; margin-left: 7px; padding: 1px 6px; border-radius: 6px; background: var(--pine); color: var(--linen); font-size: 10px; font-weight: 900; letter-spacing: .08em; vertical-align: 2px; }
 .tplayers { grid-area: players; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .phead { display: flex; align-items: baseline; justify-content: space-between; }
 .phead small { font-size: 12px; font-weight: 800; opacity: .8; }
@@ -179,8 +196,15 @@ input::placeholder { color: var(--placeholder); }
 .seat.hot { background: var(--mustard); box-shadow: 0 8px 0 var(--pine-deep); }
 .seat.dim { opacity: .5; }
 .seat .av { width: 52px; height: 52px; }
-.seat .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.seat .nm { font-weight: 900; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* max-width is doing real work on both of these. Under 700px the seat turns into a centred
+   column (see the media query below), so these are sized to their content rather than
+   stretched, and min-width:0 alone cannot stop a long name pushing past the seat edge. */
+.seat .who { flex: 1; min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 3px; }
+/* The name truncates; the position chip must not. Keeping .pos outside .nm means a long
+   name ellipsises instead of shoving the chip out of the clipping box and hiding it —
+   seats are only ~110px wide on a phone, where the list is three columns. */
+.seat .nmrow { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.seat .nm { flex: 0 1 auto; min-width: 0; font-weight: 900; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seat .st, .seat .of { font-size: 12px; font-weight: 700; color: var(--pine); }
 .seat .of { font-size: 11px; }
 .seat .money { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
@@ -291,7 +315,9 @@ input::placeholder { color: var(--placeholder); }
   .submit { font-size: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .swirl i, .crt, .logo, .rif, .pop { animation: none !important; }
+  /* .ann is still shown and still removed on its timer — it just arrives without motion,
+     so the street and the deal instruction survive with the animation off. */
+  .swirl i, .crt, .logo, .rif, .pop, .ann { animation: none !important; }
 }
 </style>
 <div class="swirl" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="vg"></i></div>
@@ -775,6 +801,55 @@ input::placeholder { color: var(--placeholder); }
       pot: potTotal(h),
       currentBet: h.currentBet
     };
+  }
+  function boardCount(street) {
+    return street === "preflop" ? 0 : street === "flop" ? 3 : street === "turn" ? 4 : 5;
+  }
+  var POSITION_NAMES = {
+    BTN: "on the button",
+    SB: "in the small blind",
+    BB: "in the big blind",
+    CO: "in the cutoff",
+    HJ: "in the hijack",
+    UTG: "under the gun"
+  };
+  function positionName(code) {
+    return POSITION_NAMES[code] || (code.startsWith("UTG+") ? "under the gun +" + code.slice(4) : code);
+  }
+  function positions(h) {
+    const seats = h.seats, n = seats.length;
+    const b = seats.indexOf(h.buttonId);
+    const out = {};
+    if (b < 0) return out;
+    const at = (o) => seats[(b + o) % n];
+    if (n === 2) {
+      out[at(0)] = "SB";
+      out[at(1)] = "BB";
+      return out;
+    }
+    out[at(0)] = "BTN";
+    out[at(1)] = "SB";
+    out[at(2)] = "BB";
+    for (let o = 3; o < n; o++) {
+      out[at(o)] = o === n - 1 ? "CO" : n >= 6 && o === n - 2 ? "HJ" : o === 3 ? "UTG" : "UTG+" + (o - 3);
+    }
+    return out;
+  }
+  function toActAfter(h, id) {
+    if (!h.toAct) return -1;
+    const from = h.seats.indexOf(h.toAct);
+    if (from < 0) return -1;
+    const order = h.seats.slice(from).concat(h.seats.slice(0, from));
+    const i = order.indexOf(id);
+    if (i < 0) return -1;
+    const owes = (x) => !h.folded[x] && !h.allIn[x] && (!h.acted[x] || (h.bets[x] || 0) < h.currentBet);
+    return order.slice(i + 1).filter(owes).length;
+  }
+  function streetChange(prev, next) {
+    if (!prev || !next || prev.no !== next.no) return null;
+    if (next.street === "showdown") return null;
+    if (STREETS.indexOf(next.street) <= STREETS.indexOf(prev.street)) return null;
+    return { street: next.street, hint: DEAL_HINT[next.street] };
   }
 
   // src/transport.ts
@@ -1411,6 +1486,11 @@ input::placeholder { color: var(--placeholder); }
   ];
   var byV = (v) => CHIPS.find((c) => c.v === v);
   var AVATAR = ["#141a17", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
+  function avatarColor(id) {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = hash * 31 + id.charCodeAt(i) >>> 0;
+    return AVATAR[hash % AVATAR.length];
+  }
   var ROOM_COLORS = ["#E3C35A", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
   var STREET = { preflop: "PREFLOP", flop: "FLOP", turn: "TURN", river: "RIVER", showdown: "SHOWDOWN" };
   var STACK_OPTS = [500, 1e3, 2e3];
@@ -1492,6 +1572,12 @@ input::placeholder { color: var(--placeholder); }
   var tableHTML = `<div class="abs" style="left:-160px;top:170px;width:1120px;height:460px;border-radius:50%;background:#2A4B40"></div>
   <div class="abs" style="left:-142px;top:188px;width:1084px;height:424px;border-radius:50%;background:radial-gradient(ellipse at 50% 25%,#4a8a63 0%,#3B7955 45%,#336a4b 100%)"></div>
   <div class="abs" style="left:-90px;top:226px;width:980px;height:360px;border-radius:50%;border:2px solid rgba(227,195,90,.4);box-sizing:border-box"></div>`;
+  var BOARD_SLOTS = 5;
+  function boardHTML(dealt) {
+    let out = "";
+    for (let i = 0; i < BOARD_SLOTS; i++) out += `<div class="${i < dealt ? "bcard" : "bslot"}"></div>`;
+    return out;
+  }
   var avatarHTML = (color, dealer, glyph) => `<div class="avwrap"><div class="av" style="background:${color}${glyph ? ";--glyph:" + glyph : ""}"></div>${dealer ? '<div class="dbadge">D</div>' : ""}</div>`;
   var net = null;
   var netReady = null;
@@ -1622,6 +1708,7 @@ input::placeholder { color: var(--placeholder); }
     if (unsub) unsub();
     backend = b;
     let lastTurn = null;
+    let lastPos = null;
     const u1 = b.onState((s) => {
       S = s;
       if (ui.view === "auto") ui.view = s.handNo > 0 || s.hand ? "table" : "room";
@@ -1629,8 +1716,11 @@ input::placeholder { color: var(--placeholder); }
       const turn = s.hand && s.hand.toAct;
       if (turn && turn !== lastTurn && turn === meId() && !isLocal()) buzz([60, 40, 60]);
       lastTurn = turn;
+      const change = streetChange(lastPos, s.hand);
+      lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
       trackPot();
       render();
+      if (change) announceStreet(change);
     });
     const u2 = b.onOnline ? b.onOnline((set) => {
       online = set;
@@ -1889,11 +1979,13 @@ input::placeholder { color: var(--placeholder); }
           ${handsSVG}${riffleHTML(560, 322)}
           <div class="potpile" id="potPile"></div>
           <div class="potlabel" id="potLabel"></div>
+          <div class="board" id="board"></div>
         </div>
         <div class="spill turn" id="turnPill" aria-live="polite"></div>
         <div class="spill street" id="streetPill"></div>
-        <div class="slast" id="lastLine" aria-live="polite"></div>
+        <div class="announce" id="announce" aria-hidden="true"></div>
       </div>
+      <div class="slast" id="lastLine" aria-live="polite"></div>
     </section>
     <section class="tplayers" aria-label="Players">
       <div class="phead"><div class="sec">PLAYERS</div><small id="pcount"></small></div>
@@ -1935,6 +2027,7 @@ input::placeholder { color: var(--placeholder); }
     });
     patch("potPile", CHIPS.filter((c) => groups[c.v]).reverse().map((c) => stack3D(c, Math.min(groups[c.v], 7), SIZE.pot)).join(""));
     patch("potLabel", `<b>POT</b><span class="px num">${money(pot)}</span>`);
+    patch("board", h ? boardHTML(boardCount(h.street)) : "");
     let turnText, turnBg = "var(--pine)", turnInk = "var(--linen)";
     if (h && h.street === "showdown") turnText = "SHOWDOWN";
     else if (h && h.toAct) {
@@ -1950,10 +2043,11 @@ input::placeholder { color: var(--placeholder); }
     tp.style.color = turnInk;
     patch("streetPill", h ? STREET[h.street] : "BETWEEN HANDS");
     patch("lastLine", esc(lastLine()));
-    const others = S.players.filter((p) => p.id !== viewer);
+    const others = ringFrom(viewer);
+    const pos = h ? positions(h) : {};
     const live = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount();
     patch("pcount", h ? `${live} IN HAND` : `${S.players.length} SEATED`);
-    patch("seats", others.length ? others.map((p) => seatHTML(p)).join("") : `<div class="empty-seats">${isLocal() ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
+    patch("seats", others.length ? others.map((p) => seatHTML(p, pos[p.id])).join("") : `<div class="empty-seats">${isLocal() ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
     const stack = vp ? vp.stack : 0;
     const avail = stack - staged;
     patch("avail", money(avail));
@@ -1996,9 +2090,13 @@ input::placeholder { color: var(--placeholder); }
     if (h.toAct === p.id) return "Thinking…";
     return h.last && h.last[p.id] || "Waiting";
   }
-  function seatHTML(p) {
+  function ringFrom(viewer) {
+    const list = S.players;
+    const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
+    return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
+  }
+  function seatHTML(p, pos) {
     const h = S.hand;
-    const idx = S.players.indexOf(p);
     const inHand = h && h.seats.includes(p.id);
     const acting = h && h.toAct === p.id && h.street !== "showdown";
     const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
@@ -2008,8 +2106,10 @@ input::placeholder { color: var(--placeholder); }
     let st = statusOf(p);
     if (!isLocal() && online.size && !online.has(p.id) && !acting) st += " · away";
     return `<button class="seat ${acting || won ? "hot" : ""} ${dim ? "dim" : ""}" data-a="player" data-id="${esc(p.id)}">
-    ${avatarHTML(AVATAR[idx % AVATAR.length], isDealer)}
-    <div class="who"><div class="nm">${esc(p.name)}</div><div class="st">${esc(st)}</div></div>
+    ${avatarHTML(avatarColor(p.id), isDealer)}
+    <div class="who">
+      <div class="nmrow"><div class="nm">${esc(p.name)}</div>${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div>
+      <div class="st">${esc(st)}</div></div>
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
   }
@@ -2024,12 +2124,20 @@ input::placeholder { color: var(--placeholder); }
     const inRound = h && h.seats.includes(p.id) ? h.bets[p.id] || 0 : 0;
     const status = myTurn ? isMe ? "Your turn" : isLocal() ? "Your turn. Pass the phone after." : `Acting for ${p.name}` : statusOf(p);
     const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
+    const pos = h && h.seats.includes(p.id) ? positions(h)[p.id] : "";
+    let posLine = "";
+    if (pos) {
+      const canStillAct = h.street !== "showdown" && !h.folded[p.id] && !h.allIn[p.id];
+      const after = canStillAct ? toActAfter(h, p.id) : -1;
+      const tail = after < 0 ? "" : after === 0 ? " · last to act" : ` · ${after} still to act after`;
+      posLine = `<div class="mesub">${esc((isMe ? "You’re " : UP(p.name) + " is ") + positionName(pos) + tail)}</div>`;
+    }
     let extra = "";
     if (!isLocal() && amHost() && h && h.toAct && h.toAct !== meId() && h.street !== "showdown") {
       extra = ui.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>' : `<button class="melink" data-a="act-for">Act for ${esc(nameOf2(h.toAct))} (phone died?)</button>`;
     }
     return `<div class="merow">${avatarHTML("var(--ink)", isDealer, "var(--mustard)")}
-      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? "YOU" : esc(UP(p.name))}</div><div class="mesub">${esc(status)}</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? "YOU" : esc(UP(p.name))}${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div><div class="mesub">${esc(status)}</div>${posLine}</div></div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <div style="font-size:11px;font-weight:900;letter-spacing:.14em;color:var(--pine)">STACK</div>
       <div class="px mestack num">${money(p.stack - (myTurn ? ui.staged.reduce((a, b) => a + b, 0) : 0))}</div>
@@ -2198,6 +2306,17 @@ input::placeholder { color: var(--placeholder); }
     el.textContent = text;
     layer.appendChild(el);
     setTimeout(() => el.remove(), 950);
+  }
+  var STREET_MS = 1500;
+  function announceStreet(c) {
+    const layer = document.getElementById("announce");
+    if (!layer) return;
+    layer.textContent = "";
+    const el = document.createElement("div");
+    el.className = "ann";
+    el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), STREET_MS);
   }
   function addChip(v) {
     const actor = actorId();
