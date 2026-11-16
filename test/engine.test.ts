@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as E from '../src/engine.ts';
+import * as E from '../src/engine/index.ts';
 import type { Action, ActionType, TableState } from '../src/types.ts';
 
 function table(names: string[] = ['a', 'b', 'c'], opts: Record<string, unknown> = {}): TableState {

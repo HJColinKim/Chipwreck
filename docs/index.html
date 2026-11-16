@@ -343,7 +343,7 @@ input::placeholder { color: var(--placeholder); }
 <script>
 "use strict";
 (() => {
-  // src/engine.ts
+  // src/engine/core.ts
   var STREETS = ["preflop", "flop", "turn", "river", "showdown"];
   var DEAL_HINT = {
     preflop: "Deal two cards to each player",
@@ -352,12 +352,53 @@ input::placeholder { color: var(--placeholder); }
     river: "Burn one, deal the river (1 card)",
     showdown: "Show hands and pick the winner"
   };
-  var HISTORY_MAX = 10;
   var LOG_MAX = 40;
   var clone = (o) => JSON.parse(JSON.stringify(o));
   var fail = (msg) => {
     throw new Error(msg);
   };
+  function int(n) {
+    const v = Math.floor(Number(n));
+    return Number.isFinite(v) ? v : NaN;
+  }
+  function cap(w) {
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }
+  var player = (s, id) => s.players.find((p) => p.id === id);
+  var eligible = (s) => s.players.filter((p) => p.stack > 0 && !p.sittingOut);
+  var isHost = (s, id) => id === s.hostId || id === "*";
+  var nameOf = (s, id) => (player(s, id) || { name: "?" }).name;
+  function log(s, msg) {
+    s.log.push(msg);
+    if (s.log.length > LOG_MAX) s.log.splice(0, s.log.length - LOG_MAX);
+  }
+  function nextIn(order, fromId, pred) {
+    const n = order.length;
+    const i = fromId === null ? -1 : order.indexOf(fromId);
+    for (let k = 1; k <= n; k++) {
+      const id = order[(i + k + n) % n];
+      if (pred(id)) return id;
+    }
+    return null;
+  }
+
+  // src/engine/table.ts
+  var NAME_MAX = 18;
+  function validateSettings(st) {
+    if (!(st.startingStack > 0)) fail("Starting stack must be more than 0");
+    if (!(st.sb > 0)) fail("Small blind must be more than 0");
+    if (!(st.bb >= st.sb)) fail("Big blind must be at least the small blind");
+  }
+  var cleanName = (name) => String(name || "").trim().slice(0, NAME_MAX);
+  function addPlayer(s, id, name) {
+    s.players.push({
+      id,
+      name: cleanName(name) || "Player",
+      stack: s.settings.startingStack,
+      buyIns: 1,
+      sittingOut: false
+    });
+  }
   function newTable({ code, hostId, hostName, startingStack = 1e3, sb = 5, bb = 10 }) {
     if (!code) fail("Missing table code");
     const s = {
@@ -378,40 +419,12 @@ input::placeholder { color: var(--placeholder); }
     s.buttonId = hostId || null;
     return s;
   }
-  function int(n) {
-    const v = Math.floor(Number(n));
-    return Number.isFinite(v) ? v : NaN;
-  }
-  function validateSettings(st) {
-    if (!(st.startingStack > 0)) fail("Starting stack must be more than 0");
-    if (!(st.sb > 0)) fail("Small blind must be more than 0");
-    if (!(st.bb >= st.sb)) fail("Big blind must be at least the small blind");
-  }
-  function addPlayer(s, id, name) {
-    const clean = String(name || "").trim().slice(0, 18) || "Player";
-    s.players.push({ id, name: clean, stack: s.settings.startingStack, buyIns: 1, sittingOut: false });
-  }
-  var player = (s, id) => s.players.find((p) => p.id === id);
-  var eligible = (s) => s.players.filter((p) => p.stack > 0 && !p.sittingOut);
-  var isHost = (s, id) => id === s.hostId || id === "*";
-  var nameOf = (s, id) => (player(s, id) || { name: "?" }).name;
-  function log(s, msg) {
-    s.log.push(msg);
-    if (s.log.length > LOG_MAX) s.log.splice(0, s.log.length - LOG_MAX);
-  }
-  function nextIn(order, fromId, pred) {
-    const n = order.length;
-    const i = fromId === null ? -1 : order.indexOf(fromId);
-    for (let k = 1; k <= n; k++) {
-      const id = order[(i + k + n) % n];
-      if (pred(id)) return id;
-    }
-    return null;
-  }
+
+  // src/engine/pots.ts
   function computePots(hand) {
     const ids = hand.seats;
-    const live = ids.filter((id) => !hand.folded[id]);
-    const levels = [...new Set(live.map((id) => hand.committed[id] || 0))].filter((v) => v > 0).sort((a, b) => a - b);
+    const live2 = ids.filter((id) => !hand.folded[id]);
+    const levels = [...new Set(live2.map((id) => hand.committed[id] || 0))].filter((v) => v > 0).sort((a, b) => a - b);
     const pots = [];
     let prev = 0;
     for (const lvl of levels) {
@@ -420,7 +433,7 @@ input::placeholder { color: var(--placeholder); }
         const c = hand.committed[id] || 0;
         amount += Math.max(0, Math.min(c, lvl) - Math.min(c, prev));
       }
-      const elig = live.filter((id) => (hand.committed[id] || 0) >= lvl);
+      const elig = live2.filter((id) => (hand.committed[id] || 0) >= lvl);
       if (amount > 0) {
         const last = pots[pots.length - 1];
         if (last && last.eligible.join() === elig.join()) last.amount += amount;
@@ -434,6 +447,8 @@ input::placeholder { color: var(--placeholder); }
     return pots;
   }
   var potTotal = (hand) => hand ? hand.seats.reduce((t, id) => t + (hand.committed[id] || 0), 0) : 0;
+
+  // src/engine/hand.ts
   function post(s, h, id, amt) {
     const p = player(s, id);
     const a = Math.min(p.stack, amt);
@@ -442,6 +457,9 @@ input::placeholder { color: var(--placeholder); }
     h.committed[id] = (h.committed[id] || 0) + a;
     if (p.stack === 0) h.allIn[id] = true;
     return a;
+  }
+  function canAct(h, id) {
+    return !h.folded[id] && !h.allIn[id];
   }
   function startHand(s) {
     if (s.hand) fail("A hand is already in progress");
@@ -493,14 +511,11 @@ input::placeholder { color: var(--placeholder); }
     h.toAct = firstToAct;
     advance(s, firstToAct, true);
   }
-  function canAct(h, id) {
-    return !h.folded[id] && !h.allIn[id];
-  }
   function advance(s, lastId, initial) {
     const h = s.hand;
-    const live = h.seats.filter((id) => !h.folded[id]);
-    if (live.length === 1) return winUncontested(s, live[0]);
-    const actors = live.filter((id) => canAct(h, id));
+    const live2 = h.seats.filter((id) => !h.folded[id]);
+    if (live2.length === 1) return winUncontested(s, live2[0]);
+    const actors = live2.filter((id) => canAct(h, id));
     const needs = (id) => canAct(h, id) && (!h.acted[id] || (h.bets[id] || 0) < h.currentBet);
     let roundDone;
     if (actors.length === 0) roundDone = true;
@@ -595,6 +610,8 @@ input::placeholder { color: var(--placeholder); }
     log(s, wins.map((w) => `${nameOf(s, w.id)} wins ${w.amount}`).join(", ") + ".");
     finishHand(s, wins);
   }
+
+  // src/engine/betting.ts
   function act(s, a) {
     const h = s.hand;
     if (!h || h.street === "showdown") fail("No betting right now");
@@ -652,6 +669,10 @@ input::placeholder { color: var(--placeholder); }
     h.last[id] = h.allIn[id] ? "All in" : label;
     advance(s, id);
   }
+
+  // src/engine/reduce.ts
+  var HISTORY_MAX = 10;
+  var TABLE_MAX = 10;
   function reduce(prev, a) {
     if (!a || !a.type) fail("Missing action");
     const s = clone(prev);
@@ -669,10 +690,10 @@ input::placeholder { color: var(--placeholder); }
       case "join": {
         const existing = player(s, a.by);
         if (existing) {
-          if (a.name) existing.name = String(a.name).trim().slice(0, 18) || existing.name;
+          if (a.name) existing.name = cleanName(a.name) || existing.name;
           break;
         }
-        if (s.players.length >= 10) fail("Table is full (10 players)");
+        if (s.players.length >= TABLE_MAX) fail(`Table is full (${TABLE_MAX} players)`);
         addPlayer(s, a.by, a.name);
         if (!s.hostId) s.hostId = a.by;
         if (!s.buttonId) s.buttonId = a.by;
@@ -793,9 +814,8 @@ input::placeholder { color: var(--placeholder); }
     s.updatedAt = Date.now();
     return s;
   }
-  function cap(w) {
-    return w.charAt(0).toUpperCase() + w.slice(1);
-  }
+
+  // src/engine/views.ts
   function legal(s, id) {
     const h = s.hand;
     if (!h || h.street === "showdown" || h.toAct !== id) return null;
@@ -866,47 +886,11 @@ input::placeholder { color: var(--placeholder); }
     return { street: next.street, hint: DEAL_HINT[next.street] };
   }
 
-  // src/transport.ts
+  // src/transport/backend.ts
   var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  var rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
   var CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   var makeCode = () => Array.from({ length: 4 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join("");
-  var rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-  var store = {
-    get(k) {
-      try {
-        return localStorage.getItem(k);
-      } catch (e) {
-        return null;
-      }
-    },
-    set(k, v) {
-      try {
-        localStorage.setItem(k, v);
-      } catch (e) {
-      }
-    },
-    del(k) {
-      try {
-        localStorage.removeItem(k);
-      } catch (e) {
-      }
-    }
-  };
-  var sess = {
-    get(k) {
-      try {
-        return sessionStorage.getItem(k);
-      } catch (e) {
-        return null;
-      }
-    },
-    set(k, v) {
-      try {
-        sessionStorage.setItem(k, v);
-      } catch (e) {
-      }
-    }
-  };
   var Emitter = class {
     state = null;
     online = /* @__PURE__ */ new Set();
@@ -936,6 +920,8 @@ input::placeholder { color: var(--placeholder); }
       this.onlineSubs.forEach((cb) => cb(set));
     }
   };
+
+  // src/transport/claude.ts
   var ClaudeBackend = class extends Emitter {
     kind = "claude";
     me = { id: "" };
@@ -1081,6 +1067,8 @@ input::placeholder { color: var(--placeholder); }
     if (d && d.code === "quota_exceeded") return new Error("Storage is full. Delete old tables.");
     return new Error(d && d.message || "Something went wrong syncing the table.");
   }
+
+  // src/transport/relay.ts
   var BROKERS = [
     "wss://broker.emqx.io:8084/mqtt",
     "wss://broker.hivemq.com:8884/mqtt",
@@ -1183,6 +1171,49 @@ input::placeholder { color: var(--placeholder); }
       this.subs.clear();
     }
   };
+
+  // src/transport/storage.ts
+  var store = {
+    get(k) {
+      try {
+        return localStorage.getItem(k);
+      } catch (e) {
+        return null;
+      }
+    },
+    set(k, v) {
+      try {
+        localStorage.setItem(k, v);
+      } catch (e) {
+      }
+    },
+    del(k) {
+      try {
+        localStorage.removeItem(k);
+      } catch (e) {
+      }
+    }
+  };
+  var sess = {
+    get(k) {
+      try {
+        return sessionStorage.getItem(k);
+      } catch (e) {
+        return null;
+      }
+    },
+    set(k, v) {
+      try {
+        sessionStorage.setItem(k, v);
+      } catch (e) {
+      }
+    }
+  };
+
+  // src/transport/peer.ts
+  var SEEN_MAX = 500;
+  var AWAY_MS = 4e4;
+  var CLAIM_MS = 45e3;
   var PeerBackend = class extends Emitter {
     kind = "peer";
     me;
@@ -1250,7 +1281,7 @@ input::placeholder { color: var(--placeholder); }
       if (msg.id) {
         if (this.seen.has(msg.id)) return;
         this.seen.add(msg.id);
-        if (this.seen.size > 500) this.seen = new Set([...this.seen].slice(-250));
+        if (this.seen.size > SEEN_MAX) this.seen = new Set([...this.seen].slice(-SEEN_MAX / 2));
       }
       if (topic === this.base + "/state") {
         if (!msg.state || msg.state.code !== this.code) return;
@@ -1326,7 +1357,7 @@ input::placeholder { color: var(--placeholder); }
       if (!tab) return;
       const now = Date.now();
       const validPid = (p) => typeof p === "string" && /^p[a-z0-9]{6,30}$/.test(p);
-      const takenByOther = (pid2) => pid2 === this.me.id || [...this.players].some(([t, v]) => t !== tab && v.pid === pid2 && now - v.at < 45e3);
+      const takenByOther = (pid2) => pid2 === this.me.id || [...this.players].some(([t, v]) => t !== tab && v.pid === pid2 && now - v.at < CLAIM_MS);
       if (msg.t === "hello") {
         let pid2 = validPid(msg.pid) ? msg.pid : "p" + rid();
         if (takenByOther(pid2)) pid2 = "p" + rid();
@@ -1357,7 +1388,7 @@ input::placeholder { color: var(--placeholder); }
       const now = Date.now();
       const set = /* @__PURE__ */ new Set([this.me.id]);
       this.players.forEach((v) => {
-        if (now - v.at < 4e4) set.add(v.pid);
+        if (now - v.at < AWAY_MS) set.add(v.pid);
       });
       this.setOnline(set);
     }
@@ -1365,10 +1396,10 @@ input::placeholder { color: var(--placeholder); }
     async open(code) {
       const saved = store.get("chipstack:host:" + code);
       await this.link(code);
-      const live = await this.waitForState(2500);
+      const live2 = await this.waitForState(2500);
       if (saved) {
         const st = JSON.parse(saved);
-        const best = live && (live.version || 0) > (st.version || 0) ? live : st;
+        const best = live2 && (live2.version || 0) > (st.version || 0) ? live2 : st;
         if (best.hostId) {
           this.me.id = best.hostId;
           sess.set("chipstack:pid", best.hostId);
@@ -1376,11 +1407,11 @@ input::placeholder { color: var(--placeholder); }
         this.becomeHost(best);
         return code;
       }
-      if (!live) {
+      if (!live2) {
         this.close();
         throw new Error(`No table with code ${code}. Check the code with the host.`);
       }
-      this.push(live);
+      this.push(live2);
       await new Promise((res, rej) => {
         let settled = false;
         this.welcomed = () => {
@@ -1451,6 +1482,9 @@ input::placeholder { color: var(--placeholder); }
       this.state = null;
     }
   };
+
+  // src/transport/local.ts
+  var KEY = "chipstack:local";
   var LocalBackend = class extends Emitter {
     kind = "local";
     me = { id: "*" };
@@ -1466,17 +1500,16 @@ input::placeholder { color: var(--placeholder); }
       return code;
     }
     async open() {
-      const raw = store.get("chipstack:local");
+      const raw = store.get(KEY);
       if (!raw) throw new Error("No saved one-phone table.");
       this.state = null;
       this.push(JSON.parse(raw));
     }
     save() {
-      store.set("chipstack:local", JSON.stringify(this.state));
+      store.set(KEY, JSON.stringify(this.state));
     }
     async submit(action) {
-      const a = { ...action, by: action.by || "*" };
-      const next = reduce(this.state, a);
+      const next = reduce(this.state, { ...action, by: action.by || "*" });
       this.push(next);
       this.save();
       return next;
@@ -1486,12 +1519,19 @@ input::placeholder { color: var(--placeholder); }
     }
   };
 
-  // src/app.ts
-  var $app = document.getElementById("app");
-  var ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-  var esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
-  var money = (n) => "$" + Number(n || 0).toLocaleString("en-NZ");
-  var UP = (s) => String(s || "").toUpperCase();
+  // src/transport/index.ts
+  async function pickBackend() {
+    if (window.claude && typeof window.claude.use === "function") {
+      const db = await window.claude.use("db");
+      if (db) {
+        const [user, room] = await Promise.all([window.claude.use("user"), window.claude.use("room")]);
+        return new ClaudeBackend(db, user, room).init();
+      }
+    }
+    return new PeerBackend().init();
+  }
+
+  // src/ui/theme.ts
   var CHIPS = [
     { v: 5, label: "$5", base: "#B8432F", stripe: "#E3C35A" },
     { v: 10, label: "$10", base: "#2F5D73", stripe: "#E3E7D8" },
@@ -1499,6 +1539,15 @@ input::placeholder { color: var(--placeholder); }
     { v: 100, label: "$100", base: "#141a17", stripe: "#E3C35A" }
   ];
   var byV = (v) => CHIPS.find((c) => c.v === v);
+  function greedy(amount) {
+    const r = [];
+    let rem = amount;
+    for (const d of [100, 25, 10, 5]) while (rem >= d) {
+      r.push(d);
+      rem -= d;
+    }
+    return r;
+  }
   var AVATAR = ["#141a17", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
   function avatarColor(id) {
     let hash = 0;
@@ -1506,7 +1555,13 @@ input::placeholder { color: var(--placeholder); }
     return AVATAR[hash % AVATAR.length];
   }
   var ROOM_COLORS = ["#E3C35A", "#B8432F", "#2F5D73", "#839E9F", "#3B7955"];
-  var STREET = { preflop: "PREFLOP", flop: "FLOP", turn: "TURN", river: "RIVER", showdown: "SHOWDOWN" };
+  var STREET = {
+    preflop: "PREFLOP",
+    flop: "FLOP",
+    turn: "TURN",
+    river: "RIVER",
+    showdown: "SHOWDOWN"
+  };
   var STACK_OPTS = [500, 1e3, 2e3];
   var BLIND_OPTS = [[5, 10], [10, 20], [25, 50]];
   var PIXEL = "font-family:var(--pixel);font-weight:400;letter-spacing:.03em;text-shadow:var(--fringe)";
@@ -1517,26 +1572,157 @@ input::placeholder { color: var(--placeholder); }
     rif: { w: 44, face: 18, ry: 9, sideH: 17, a: 6, b: 10, inset: "18% 14%", ring: 0, dk: 0.05 },
     lobby: { w: 60, face: 26, ry: 13, sideH: 23, a: 8, b: 13, inset: "16% 12%", ring: 0, dk: 0.05, off: 9, sh: 8 }
   };
-  function greedy(amount) {
-    const r = [];
-    let rem = amount;
-    for (const d of [100, 25, 10, 5]) while (rem >= d) {
-      r.push(d);
-      rem -= d;
+
+  // src/ui/format.ts
+  var ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  var esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
+  var money = (n) => "$" + Number(n || 0).toLocaleString("en-NZ");
+  var UP = (s) => String(s || "").toUpperCase();
+
+  // src/ui/state.ts
+  var ui = {
+    view: "lobby",
+    tab: "join",
+    code: "",
+    name: store.get("chipstack:name") || "",
+    stack: 1e3,
+    blinds: 0,
+    err: "",
+    busy: false,
+    homeNote: "",
+    addName: "",
+    pending: null,
+    staged: [],
+    stageKey: "",
+    confirmFold: false,
+    actFor: false,
+    picks: [],
+    pickKey: "",
+    split: false,
+    sheet: null,
+    sheetPlayer: null,
+    confirmRemove: false
+  };
+  var NO_TABLE = null;
+  var live = { backend: null, net: null, S: NO_TABLE, online: /* @__PURE__ */ new Set() };
+  var device = () => {
+    const b = live.backend;
+    return { id: b ? b.me.id : null, kind: b ? b.kind : null, local: !!b && b.kind === "local" };
+  };
+
+  // src/ui/dom.ts
+  var $app = document.getElementById("app");
+  var isMobile = () => window.innerWidth < 700;
+  var mounted = null;
+  var cache = /* @__PURE__ */ new Map();
+  function mount(name, html) {
+    if (mounted === name) return false;
+    mounted = name;
+    cache.clear();
+    $app.innerHTML = html;
+    return true;
+  }
+  function patch(id, html) {
+    if (cache.get(id) === html) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    cache.set(id, html);
+    const a = document.activeElement;
+    const keep = a && a.id && el.contains(a) && a.tagName === "INPUT" ? { id: a.id, start: a.selectionStart, end: a.selectionEnd } : null;
+    el.innerHTML = html;
+    if (keep) {
+      const n = document.getElementById(keep.id);
+      if (n) {
+        n.focus();
+        try {
+          n.setSelectionRange(keep.start, keep.end);
+        } catch (e) {
+        }
+      }
     }
-    return r;
   }
-  function chipHTML(c, P2, top, label, extraStyle) {
-    const hw = P2.w / 2;
-    return `<div class="ch" style="left:0;top:${top}px;width:${P2.w}px;height:${P2.ry + P2.sideH}px;${extraStyle || ""}"><div class="ch-side" style="top:${P2.ry}px;width:${P2.w}px;height:${P2.sideH}px;border-radius:0 0 ${hw}px ${hw}px / 0 0 ${P2.ry}px ${P2.ry}px;background:linear-gradient(90deg,rgba(0,0,0,${P2.dk}),rgba(0,0,0,.4)),repeating-linear-gradient(90deg,${c.base} 0 ${P2.a}px,${c.stripe} ${P2.a}px ${P2.b}px)"></div><div class="ch-face" style="width:${P2.w}px;height:${P2.face}px;background:repeating-conic-gradient(${c.base} 0deg 20deg,${c.stripe} 20deg 30deg)"><div class="ch-in" style="inset:${P2.inset};background:${c.base};${P2.ring ? `border:${P2.ring}px solid ${c.stripe};` : ""}color:${c.stripe};${P2.label || ""}">${label || ""}</div></div></div>`;
+  var ro = window.ResizeObserver ? new ResizeObserver((entries) => {
+    for (const en of entries) {
+      const el = en.target, w = el.clientWidth, h = el.clientHeight;
+      el.style.setProperty("--sc", String(el.classList.contains("stage") ? Math.min(w / 800, h / 420) : w / 800));
+    }
+  }) : null;
+  function observe(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (ro) ro.observe(el);
+    const w = el.clientWidth, h = el.clientHeight;
+    el.style.setProperty("--sc", String(el.classList.contains("stage") ? Math.min(w / 800, (h || 420) / 420) : w / 800));
   }
-  function stack3D(c, n, P2, opts) {
+  var toastTimer;
+  function toast(msg, bad) {
+    let el = document.querySelector(".toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "toast";
+      el.setAttribute("role", "status");
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.toggle("bad", !!bad);
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      el.hidden = true;
+    }, bad ? 3600 : 2200);
+  }
+  function popAt(layerId, text, top, size) {
+    const layer = document.getElementById(layerId);
+    if (!layer) return;
+    const el = document.createElement("div");
+    el.className = "pop";
+    el.style.top = top;
+    el.style.fontSize = size + "px";
+    el.textContent = text;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 950);
+  }
+  var STREET_MS = 1500;
+  function announceStreet(c) {
+    const layer = document.getElementById("announce");
+    if (!layer) return;
+    layer.textContent = "";
+    const el = document.createElement("div");
+    el.className = "ann";
+    el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), STREET_MS);
+  }
+  var wakeLock = null;
+  function keepAwake() {
+    if (wakeLock || !navigator.wakeLock || !live.S) return;
+    navigator.wakeLock.request("screen").then((l) => {
+      wakeLock = l;
+      l.addEventListener("release", () => {
+        wakeLock = null;
+      });
+    }).catch(() => {
+    });
+  }
+  var buzz = (p) => {
+    try {
+      navigator.vibrate && navigator.vibrate(p);
+    } catch (e) {
+    }
+  };
+
+  // src/ui/chips.ts
+  function chipHTML(c, P, top, label, extraStyle) {
+    const hw = P.w / 2;
+    return `<div class="ch" style="left:0;top:${top}px;width:${P.w}px;height:${P.ry + P.sideH}px;${extraStyle || ""}"><div class="ch-side" style="top:${P.ry}px;width:${P.w}px;height:${P.sideH}px;border-radius:0 0 ${hw}px ${hw}px / 0 0 ${P.ry}px ${P.ry}px;background:linear-gradient(90deg,rgba(0,0,0,${P.dk}),rgba(0,0,0,.4)),repeating-linear-gradient(90deg,${c.base} 0 ${P.a}px,${c.stripe} ${P.a}px ${P.b}px)"></div><div class="ch-face" style="width:${P.w}px;height:${P.face}px;background:repeating-conic-gradient(${c.base} 0deg 20deg,${c.stripe} 20deg 30deg)"><div class="ch-in" style="inset:${P.inset};background:${c.base};${P.ring ? `border:${P.ring}px solid ${c.stripe};` : ""}color:${c.stripe};${P.label || ""}">${label || ""}</div></div></div>`;
+  }
+  function stack3D(c, n, P, opts) {
     opts = opts || {};
-    const off = P2.off;
-    const h = P2.ry + P2.sideH + off * (n - 1);
-    let out = `<div style="position:relative;width:${P2.w}px;height:${h}px;flex:none">`;
-    out += `<div class="ch-shadow" style="left:${P2.sh}px;top:${P2.sh}px;width:${P2.w}px;height:${opts.shadowH || h}px;border-radius:${P2.w / 2}px / ${P2.ry}px"></div>`;
-    for (let i = 0; i < n; i++) out += chipHTML(c, P2, (n - 1 - i) * off, opts.noLabel || i !== n - 1 ? "" : opts.labelFn ? opts.labelFn(c) : c.label);
+    const off = P.off;
+    const h = P.ry + P.sideH + off * (n - 1);
+    let out = `<div style="position:relative;width:${P.w}px;height:${h}px;flex:none">`;
+    out += `<div class="ch-shadow" style="left:${P.sh}px;top:${P.sh}px;width:${P.w}px;height:${opts.shadowH || h}px;border-radius:${P.w / 2}px / ${P.ry}px"></div>`;
+    for (let i = 0; i < n; i++) out += chipHTML(c, P, (n - 1 - i) * off, opts.noLabel || i !== n - 1 ? "" : opts.labelFn ? opts.labelFn(c) : c.label);
     return out + "</div>";
   }
   var RIF_RED = { base: "#B8432F", stripe: "#E3C35A" };
@@ -1544,8 +1730,8 @@ input::placeholder { color: var(--placeholder); }
   var RIF_W = 110;
   var RIF_H = 100;
   function rifStacksHTML() {
-    const P2 = SIZE.rif;
-    const one = (c, x, y, z, dx, dy, delay) => `<div class="abs rif" style="left:${x}px;top:${y}px;width:${P2.w}px;height:${P2.ry + P2.sideH}px;z-index:${z};--dx:${dx}px;--dy:${dy}px;animation:cwRiffle 2.6s cubic-bezier(.6,0,.3,1) ${delay}s infinite">${chipHTML(c, P2, 0, "")}</div>`;
+    const P = SIZE.rif;
+    const one = (c, x, y, z, dx, dy, delay) => `<div class="abs rif" style="left:${x}px;top:${y}px;width:${P.w}px;height:${P.ry + P.sideH}px;z-index:${z};--dx:${dx}px;--dy:${dy}px;animation:cwRiffle 2.6s cubic-bezier(.6,0,.3,1) ${delay}s infinite">${chipHTML(c, P, 0, "")}</div>`;
     let kids = "";
     for (let i = 0; i < 5; i++) {
       kids += one(RIF_RED, 0, 64 - i * 7, 2 * i, 25, -i * 7, i * 0.05);
@@ -1562,6 +1748,8 @@ input::placeholder { color: var(--placeholder); }
     const a11y = label ? 'aria-hidden="true"' : 'role="img" aria-label="Working"';
     return `<span class="busy"><span class="rifspin" style="width:${Math.round(RIF_W * s)}px;height:${h}px" ${a11y}><span class="rifscale" style="transform:scale(${s})">${rifStacksHTML()}</span></span>` + (label ? `<span>${esc(label)}</span>` : "") + "</span>";
   }
+
+  // src/ui/scene.ts
   function dealerSVG(variant) {
     const L = variant === "lobby";
     const vest = L ? "#0c100e" : "#141a17", bow = L ? "#B8432F" : "#141a17", stud = L ? "#E3C35A" : "#141a17";
@@ -1593,299 +1781,8 @@ input::placeholder { color: var(--placeholder); }
     return out;
   }
   var avatarHTML = (color, dealer, glyph) => `<div class="avwrap"><div class="av" style="background:${color}${glyph ? ";--glyph:" + glyph : ""}"></div>${dealer ? '<div class="dbadge">D</div>' : ""}</div>`;
-  var net = null;
-  var netReady = null;
-  var backend = null;
-  var S = null;
-  var online = /* @__PURE__ */ new Set();
-  var ui = {
-    view: "lobby",
-    tab: "join",
-    code: "",
-    name: store.get("chipstack:name") || "",
-    stack: 1e3,
-    blinds: 0,
-    err: "",
-    busy: false,
-    homeNote: "",
-    addName: "",
-    pending: null,
-    staged: [],
-    stageKey: "",
-    confirmFold: false,
-    actFor: false,
-    picks: [],
-    pickKey: "",
-    split: false,
-    sheet: null,
-    sheetPlayer: null,
-    confirmRemove: false
-  };
-  var lastPot = null;
-  var lastPotHand = null;
-  function boot() {
-    const hash = (location.hash || "").replace("#", "").toUpperCase();
-    if (/^[A-Z0-9]{4}$/.test(hash)) ui.code = hash;
-    netReady = (async () => {
-      if (window.claude && typeof window.claude.use === "function") {
-        const db = await window.claude.use("db");
-        if (db) {
-          const [user, room] = await Promise.all([window.claude.use("user"), window.claude.use("room")]);
-          return new ClaudeBackend(db, user, room).init();
-        }
-      }
-      return new PeerBackend().init();
-    })();
-    netReady.then((b) => {
-      net = b;
-      render();
-    }).catch((e) => {
-      ui.homeNote = e.message;
-      render();
-    });
-    render();
-  }
-  var meId = () => backend ? backend.me.id : null;
-  var isLocal = () => !!backend && backend.kind === "local";
-  var amHost = () => !!S && (isLocal() || S.hostId === meId());
-  var P = (id) => S.players.find((p) => p.id === id);
-  var nameOf2 = (id) => (P(id) || { name: "?" }).name;
-  var isMobile = () => window.innerWidth < 700;
-  var potTotal2 = () => potTotal(S.hand);
-  var eligibleCount = () => S.players.filter((p) => p.stack > 0 && !p.sittingOut).length;
-  function actorId() {
-    const h = S && S.hand;
-    if (!h || !h.toAct || h.street === "showdown") return null;
-    if (isLocal()) return h.toAct;
-    if (h.toAct === meId()) return h.toAct;
-    if (amHost() && ui.actFor) return h.toAct;
-    return null;
-  }
-  function viewerId() {
-    if (isLocal()) return S.hand && S.hand.toAct || S.buttonId || S.players[0] && S.players[0].id;
-    return actorId() || meId();
-  }
-  var toastTimer;
-  function toast(msg, bad) {
-    let el = document.querySelector(".toast");
-    if (!el) {
-      el = document.createElement("div");
-      el.className = "toast";
-      el.setAttribute("role", "status");
-      document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    el.classList.toggle("bad", !!bad);
-    el.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      el.hidden = true;
-    }, bad ? 3600 : 2200);
-  }
-  async function send(action, tag) {
-    if (ui.busy) return false;
-    ui.busy = true;
-    ui.pending = tag ?? null;
-    render();
-    try {
-      await backend.submit(action);
-      return true;
-    } catch (e) {
-      toast(e.message, true);
-      return false;
-    } finally {
-      ui.busy = false;
-      ui.pending = null;
-      render();
-    }
-  }
-  var wakeLock = null;
-  function keepAwake() {
-    if (wakeLock || !navigator.wakeLock || !S) return;
-    navigator.wakeLock.request("screen").then((l) => {
-      wakeLock = l;
-      l.addEventListener("release", () => {
-        wakeLock = null;
-      });
-    }).catch(() => {
-    });
-  }
-  document.addEventListener("pointerdown", keepAwake, { passive: true });
-  var buzz = (p) => {
-    try {
-      navigator.vibrate && navigator.vibrate(p);
-    } catch (e) {
-    }
-  };
-  var unsub = null;
-  function attach(b) {
-    if (unsub) unsub();
-    backend = b;
-    let lastTurn = null;
-    let lastPos = null;
-    const u1 = b.onState((s) => {
-      S = s;
-      if (ui.view === "auto") ui.view = s.handNo > 0 || s.hand ? "table" : "room";
-      else if (ui.view === "room" && s.hand) ui.view = "table";
-      const turn = s.hand && s.hand.toAct;
-      if (turn && turn !== lastTurn && turn === meId() && !isLocal()) buzz([60, 40, 60]);
-      lastTurn = turn;
-      const change = streetChange(lastPos, s.hand);
-      lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
-      trackPot();
-      render();
-      if (change) announceStreet(change);
-    });
-    const u2 = b.onOnline ? b.onOnline((set) => {
-      online = set;
-      render();
-    }) : () => {
-    };
-    unsub = () => {
-      u1();
-      u2();
-    };
-  }
-  function trackPot() {
-    const h = S.hand;
-    if (!h || h.street === "showdown") {
-      lastPot = null;
-      return;
-    }
-    const pot = potTotal(h);
-    if (lastPot != null && lastPotHand === h.no && pot > lastPot) popAt("potPops", "+" + money(pot - lastPot), "30%", 44);
-    lastPot = pot;
-    lastPotHand = h.no;
-  }
-  function fail2(msg) {
-    ui.err = msg;
-    ui.busy = false;
-    render();
-  }
-  async function submitLobby(local) {
-    const name = ui.name.trim();
-    if (!local && ui.tab === "join" && ui.code.length !== 4) return fail2("Table codes are 4 characters.");
-    if (!name) return fail2("Add your name so the table knows who you are.");
-    if (!local && !net) return fail2(ui.homeNote || "Still connecting. Try again in a second.");
-    ui.err = "";
-    ui.busy = true;
-    render();
-    store.set("chipstack:name", name);
-    try {
-      if (local || ui.tab === "create") {
-        const [sb, bb] = BLIND_OPTS[ui.blinds];
-        const b = local ? await new LocalBackend().init() : net;
-        const code = await b.create({ startingStack: ui.stack, sb, bb }, name);
-        if (!local) store.set("chipstack:last", code);
-        ui.view = "room";
-        attach(b);
-      } else {
-        await openTable(ui.code, name);
-      }
-    } catch (e) {
-      ui.view = "lobby";
-      S = null;
-      fail2(e.message);
-      return;
-    }
-    ui.busy = false;
-    render();
-  }
-  async function openTable(code, name) {
-    const b = net;
-    await b.open(code);
-    store.set("chipstack:last", code);
-    ui.view = "auto";
-    attach(b);
-    if (!b.state.players.some((p) => p.id === b.me.id)) await b.submit({ type: "join", name });
-  }
-  async function rejoin(code) {
-    const name = ui.name.trim();
-    if (!name) return fail2("Add your name so the table knows who you are.");
-    if (!net) return fail2("Still connecting. Try again in a second.");
-    ui.err = "";
-    ui.busy = true;
-    render();
-    store.set("chipstack:name", name);
-    try {
-      await openTable(code, name);
-    } catch (e) {
-      ui.view = "lobby";
-      S = null;
-      return fail2(e.message);
-    }
-    ui.busy = false;
-    render();
-  }
-  async function continueLocal() {
-    try {
-      const b = new LocalBackend();
-      await b.open();
-      ui.view = "auto";
-      attach(b);
-    } catch (e) {
-      fail2(e.message);
-    }
-  }
-  function leaveToLobby() {
-    if (backend && backend.kind !== "local" && backend.close) backend.close();
-    if (unsub) unsub();
-    unsub = null;
-    backend = null;
-    S = null;
-    ui.view = "lobby";
-    ui.sheet = null;
-    ui.actFor = false;
-    ui.staged = [];
-    render();
-  }
-  var mounted = null;
-  var cache = /* @__PURE__ */ new Map();
-  function mount(name, html) {
-    if (mounted === name) return false;
-    mounted = name;
-    cache.clear();
-    $app.innerHTML = html;
-    return true;
-  }
-  function patch(id, html) {
-    if (cache.get(id) === html) return;
-    const el = document.getElementById(id);
-    if (!el) return;
-    cache.set(id, html);
-    const a = document.activeElement;
-    const keep = a && a.id && el.contains(a) && a.tagName === "INPUT" ? { id: a.id, start: a.selectionStart, end: a.selectionEnd } : null;
-    el.innerHTML = html;
-    if (keep) {
-      const n = document.getElementById(keep.id);
-      if (n) {
-        n.focus();
-        try {
-          n.setSelectionRange(keep.start, keep.end);
-        } catch (e) {
-        }
-      }
-    }
-  }
-  function render() {
-    if (!S) renderLobbyForm();
-    else if (ui.view === "room") renderRoom();
-    else renderTable();
-    patch("sheet", S ? sheetHTML() : "");
-  }
-  var ro = window.ResizeObserver ? new ResizeObserver((entries) => {
-    for (const en of entries) {
-      const el = en.target, w = el.clientWidth, h = el.clientHeight;
-      el.style.setProperty("--sc", String(el.classList.contains("stage") ? Math.min(w / 800, h / 420) : w / 800));
-    }
-  }) : null;
-  function observe(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (ro) ro.observe(el);
-    const w = el.clientWidth, h = el.clientHeight;
-    el.style.setProperty("--sc", String(el.classList.contains("stage") ? Math.min(w / 800, (h || 420) / 420) : w / 800));
-  }
+
+  // src/ui/views/lobby.ts
   function lobbySkeleton(panelId) {
     const pile = [
       { c: { base: "#2F5D73", stripe: "#E3E7D8" }, n: 3 },
@@ -1909,50 +1806,104 @@ input::placeholder { color: var(--placeholder); }
     </div>
   </main>`;
   }
-  function renderLobbyForm() {
+  function renderLobbyForm(ui2, net) {
     if (mount("lobby", lobbySkeleton("lpanel"))) observe("hero");
-    const ready = ui.name.trim() && (ui.tab === "create" || ui.code.length === 4);
+    const ready = ui2.name.trim() && (ui2.tab === "create" || ui2.code.length === 4);
     const last = store.get("chipstack:last");
     const hosted = net && net.hostedCodes ? net.hostedCodes() : [];
     const hasLocal = !!store.get("chipstack:local");
     const seg = (on, label, a, v) => `<button class="abtn ${on ? "mustard" : "pine"}" data-a="${a}" data-v="${v}" aria-pressed="${on}">${label}</button>`;
     const extras = [];
-    if (last && last !== ui.code) extras.push(`<button class="textlink" data-a="rejoin" data-code="${esc(last)}">Rejoin ${esc(last)}</button>`);
+    if (last && last !== ui2.code) extras.push(`<button class="textlink" data-a="rejoin" data-code="${esc(last)}">Rejoin ${esc(last)}</button>`);
     hosted.filter((c) => c !== last).slice(0, 2).forEach((c) => extras.push(`<button class="textlink" data-a="rejoin" data-code="${esc(c)}">Resume hosting ${esc(c)}</button>`));
     extras.push('<button class="textlink" data-a="local">One phone for everyone</button>');
     if (hasLocal) extras.push('<button class="textlink" data-a="local-continue">Continue one-phone table</button>');
     patch("lpanel", `
     <div class="tabs" role="tablist">
-      <button class="abtn ${ui.tab === "join" ? "blue" : "off"}" data-a="tab" data-v="join" role="tab" aria-selected="${ui.tab === "join"}">JOIN</button>
-      <button class="abtn ${ui.tab === "create" ? "brick" : "off"}" data-a="tab" data-v="create" role="tab" aria-selected="${ui.tab === "create"}">CREATE</button>
+      <button class="abtn ${ui2.tab === "join" ? "blue" : "off"}" data-a="tab" data-v="join" role="tab" aria-selected="${ui2.tab === "join"}">JOIN</button>
+      <button class="abtn ${ui2.tab === "create" ? "brick" : "off"}" data-a="tab" data-v="create" role="tab" aria-selected="${ui2.tab === "create"}">CREATE</button>
     </div>
-    ${ui.tab === "join" ? `
+    ${ui2.tab === "join" ? `
     <label class="flabel"><span class="lbl">Table code</span>
-      <input id="in-code" class="field codein" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="4F2K" value="${esc(ui.code)}"></label>` : `
-    <div class="flabel"><span class="lbl">Starting stack</span><div class="seg">${STACK_OPTS.map((v) => seg(ui.stack === v, money(v), "stack", v)).join("")}</div></div>
-    <div class="flabel"><span class="lbl">Blinds</span><div class="seg">${BLIND_OPTS.map((b, i) => seg(ui.blinds === i, `$${b[0]}/$${b[1]}`, "blinds", i)).join("")}</div></div>`}
+      <input id="in-code" class="field codein" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="4F2K" value="${esc(ui2.code)}"></label>` : `
+    <div class="flabel"><span class="lbl">Starting stack</span><div class="seg">${STACK_OPTS.map((v) => seg(ui2.stack === v, money(v), "stack", v)).join("")}</div></div>
+    <div class="flabel"><span class="lbl">Blinds</span><div class="seg">${BLIND_OPTS.map((b, i) => seg(ui2.blinds === i, `$${b[0]}/$${b[1]}`, "blinds", i)).join("")}</div></div>`}
     <label class="flabel"><span class="lbl">Your name</span>
-      <input id="in-name" class="field" maxlength="18" autocomplete="nickname" placeholder="What the table calls you" value="${esc(ui.name)}"></label>
-    <button id="b-submit" class="abtn submit ${ready ? "mustard" : "dead"}" data-a="submit" ${ui.busy ? "disabled" : ""}>${ui.busy ? busyHTML(ui.tab === "join" ? "JOINING…" : "DEALING YOU IN…", 40) : ui.tab === "join" ? "JOIN TABLE" : "CREATE TABLE"}</button>
-    ${ui.err ? `<div class="errpill" role="alert">${esc(ui.err)}</div>` : ""}
-    ${!net ? `<p class="note">${ui.homeNote ? esc(ui.homeNote) : busyHTML("Connecting…", 22)}</p>` : ""}
+      <input id="in-name" class="field" maxlength="18" autocomplete="nickname" placeholder="What the table calls you" value="${esc(ui2.name)}"></label>
+    <button id="b-submit" class="abtn submit ${ready ? "mustard" : "dead"}" data-a="submit" ${ui2.busy ? "disabled" : ""}>${ui2.busy ? busyHTML(ui2.tab === "join" ? "JOINING…" : "DEALING YOU IN…", 40) : ui2.tab === "join" ? "JOIN TABLE" : "CREATE TABLE"}</button>
+    ${ui2.err ? `<div class="errpill" role="alert">${esc(ui2.err)}</div>` : ""}
+    ${!net ? `<p class="note">${ui2.homeNote ? esc(ui2.homeNote) : busyHTML("Connecting…", 22)}</p>` : ""}
     <div class="extras">${extras.join("")}</div>`);
   }
-  function refreshSubmit() {
+  function refreshSubmit(ui2) {
     const b = document.getElementById("b-submit");
     if (!b) return;
-    const ready = ui.name.trim() && (ui.tab === "create" || ui.code.length === 4);
+    const ready = ui2.name.trim() && (ui2.tab === "create" || ui2.code.length === 4);
     b.classList.toggle("mustard", !!ready);
     b.classList.toggle("dead", !ready);
     const err = document.querySelector("#lpanel .errpill");
-    if (err && ui.err === "") err.remove();
+    if (err && ui2.err === "") err.remove();
   }
-  function renderRoom() {
+
+  // src/ui/selectors.ts
+  var playerOf = (S, id) => S.players.find((p) => p.id === id);
+  var nameOf2 = (S, id) => (playerOf(S, id) || { name: "?" }).name;
+  var eligibleCount = (S) => S.players.filter((p) => p.stack > 0 && !p.sittingOut).length;
+  var amHost = (S, me) => me.local || S.hostId === me.id;
+  function actorId(S, ui2, me) {
+    const h = S.hand;
+    if (!h || !h.toAct || h.street === "showdown") return null;
+    if (me.local) return h.toAct;
+    if (h.toAct === me.id) return h.toAct;
+    if (amHost(S, me) && ui2.actFor) return h.toAct;
+    return null;
+  }
+  function viewerId(S, ui2, me) {
+    if (me.local) return S.hand && S.hand.toAct || S.buttonId || S.players[0] && S.players[0].id;
+    return actorId(S, ui2, me) || me.id;
+  }
+  function ringFrom(S, viewer) {
+    const list = S.players;
+    const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
+    return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
+  }
+  function statusOf(S, p) {
+    const h = S.hand;
+    const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
+    const inHand = h && h.seats.includes(p.id);
+    if (won) return "Won the pot";
+    if (!inHand) return p.sittingOut ? "Sitting out" : p.stack === 0 ? "Busted" : h ? "Next hand" : "Ready";
+    if (h.folded[p.id]) return "Folded";
+    if (h.allIn[p.id]) return "All in";
+    if (h.toAct === p.id) return "Thinking…";
+    return h.last && h.last[p.id] || "Waiting";
+  }
+  function lastLine(S) {
+    const h = S.hand;
+    if (h && h.street === "showdown" && h.runout) return "All in. Deal out the rest of the board, then show hands.";
+    const l = S.log[S.log.length - 1] || "";
+    return l.replace(/\.$/, "");
+  }
+  function playState(S, actor, staged) {
+    const h = S.hand;
+    const L = actor ? legal(S, actor) : null;
+    if (!L || staged <= 0) return { label: "PLAY", ok: false };
+    const p = playerOf(S, actor);
+    const to = L.mine + staged;
+    const allIn = staged === p.stack;
+    if (allIn) return { label: `PLAY ${money(staged)}`, ok: true, action: to > h.currentBet ? { type: "raise", to } : { type: "call" } };
+    if (to === h.currentBet && L.toCall > 0) return { label: `CALL ${money(staged)}`, ok: true, action: { type: "call" } };
+    if (to > h.currentBet && to >= L.minTo) return { label: `PLAY ${money(staged)}`, ok: true, action: { type: "raise", to } };
+    if (to < h.currentBet) return { label: `ADD ${money(h.currentBet - to)}`, ok: false, fill: h.currentBet };
+    return { label: `ADD ${money(L.minTo - to)}`, ok: false, fill: L.minTo };
+  }
+
+  // src/ui/views/room.ts
+  function renderRoom(S, ui2, me, online, net) {
     if (mount("room", lobbySkeleton("rpanel"))) observe("hero");
-    const host = amHost(), local = isLocal();
-    const me = meId();
+    const host = amHost(S, me), local = me.local;
     const n = S.players.length;
-    const canStart = eligibleCount() >= 2;
+    const canStart = eligibleCount(S) >= 2;
     const label = local ? "ONE PHONE TABLE" : host ? "SHARE THIS CODE" : "YOU’RE IN";
     const hint = local ? "Add everyone in seat order, going clockwise." : host ? n < 2 ? "Read the code out. Players join from their phones." : "Everyone in? Start when the cards are shuffled." : "Waiting for the host to deal.";
     const rows = S.players.map((p, i) => {
@@ -1960,7 +1911,7 @@ input::placeholder { color: var(--placeholder); }
       const away = !local && online.size && !online.has(p.id);
       const tag = isH ? "HOST" : local ? "SEAT " + (i + 1) : away ? "AWAY" : "READY";
       const tagStyle = isH ? "background:var(--mustard);color:var(--ink)" : away ? "background:var(--pine);color:var(--steel)" : "background:var(--felt);color:var(--linen)";
-      return `<div class="rp">${avatarHTML(ROOM_COLORS[i % ROOM_COLORS.length])}<div class="nm">${esc(p.name)}${p.id === me && !local ? " (you)" : ""}</div><div class="tag" style="${tagStyle}">${tag}</div></div>`;
+      return `<div class="rp">${avatarHTML(ROOM_COLORS[i % ROOM_COLORS.length])}<div class="nm">${esc(p.name)}${p.id === me.id && !local ? " (you)" : ""}</div><div class="tag" style="${tagStyle}">${tag}</div></div>`;
     }).join("");
     patch("rpanel", `
     <div class="roomhead"><div class="lbl">${label}</div><button class="textlink" data-a="leave">Leave</button></div>
@@ -1971,11 +1922,85 @@ input::placeholder { color: var(--placeholder); }
       <div class="stat pine"><b>SEATED</b><span>${n}/10</span></div>
     </div>
     <div class="rplayers">${rows}</div>
-    ${local ? `<div class="addrow"><input id="in-add" class="field" maxlength="18" placeholder="Add a player" value="${esc(ui.addName)}"><button class="abtn pine" data-a="add-player">ADD</button></div>` : ""}
+    ${local ? `<div class="addrow"><input id="in-add" class="field" maxlength="18" placeholder="Add a player" value="${esc(ui2.addName)}"><button class="abtn pine" data-a="add-player">ADD</button></div>` : ""}
     <p class="note">${hint}</p>
-    ${host ? `<button id="b-start" class="abtn submit ${canStart ? "mustard" : "dead"}" data-a="deal" ${canStart && !ui.busy ? "" : "disabled"}>START GAME</button>` : `<button id="b-seat" class="abtn submit mustard" data-a="seat">TAKE YOUR SEAT</button>`}
+    ${host ? `<button id="b-start" class="abtn submit ${canStart ? "mustard" : "dead"}" data-a="deal" ${canStart && !ui2.busy ? "" : "disabled"}>START GAME</button>` : `<button id="b-seat" class="abtn submit mustard" data-a="seat">TAKE YOUR SEAT</button>`}
     ${!local && net && net.kind === "peer" ? '<div class="extras"><button class="textlink" data-a="copy-link">Copy invite link</button></div>' : ""}`);
   }
+
+  // src/ui/views/overlay.ts
+  function overlayHTML(S, ui2, me) {
+    const h = S.hand;
+    if (h && h.street === "showdown") return showdownHTML(S, ui2, me);
+    if (h) return "";
+    const res = S.lastResult;
+    const canDeal = eligibleCount(S) >= 2;
+    const myPlayer = me.local ? null : playerOf(S, me.id);
+    let kicker, title, amount = null, sub = "";
+    if (res && res.wins.length) {
+      kicker = `HAND ${res.handNo}`;
+      amount = res.wins.reduce((t, w) => t + w.amount, 0);
+      if (res.wins.length === 1) title = !me.local && res.wins[0].id === me.id ? "YOU TAKE IT" : `${UP(nameOf2(S, res.wins[0].id))} TAKES IT`;
+      else {
+        title = "SPLIT POT";
+        sub = res.wins.map((w) => `${nameOf2(S, w.id)} ${money(w.amount)}`).join(" · ");
+      }
+    } else if (res) {
+      kicker = `HAND ${res.handNo}`;
+      title = "HAND OVER";
+      sub = "Uncalled chips went back.";
+    } else {
+      kicker = me.local ? "ONE PHONE TABLE" : `TABLE ${S.code}`;
+      title = "READY TO DEAL";
+      sub = "Seat order should match where people sit, clockwise. Change it from the table menu.";
+    }
+    const btns = [];
+    btns.push(`<button class="abtn ink mgo" id="b-deal" data-a="deal" ${canDeal && !ui2.busy ? "" : "disabled"}>${ui2.pending === "deal" ? busyHTML("DEALING…", 30) : canDeal ? res ? "DEAL NEXT HAND →" : "DEAL HAND 1 →" : "NEED 2 PLAYERS WITH CHIPS"}</button>`);
+    if (myPlayer && myPlayer.stack === 0) btns.push(`<button class="abtn pine mgo" data-a="rebuy-me">REBUY ${money(S.settings.startingStack)}</button>`);
+    if (!myPlayer && !me.local) btns.push('<button class="abtn pine mgo" data-a="sit-back">JOIN THIS TABLE</button>');
+    const nextBtn = canDeal ? `<p class="msub">${esc(nameOf2(S, S.buttonId))} has the button. Blinds go in automatically.</p>` : "";
+    return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"><div class="mcard">
+    <div class="mkick">${esc(kicker)}</div>
+    <div class="px mtitle" id="m-title">${esc(title)}</div>
+    ${amount != null ? `<div class="px mamt num">${money(amount)}</div>` : ""}
+    ${sub ? `<p class="msub">${esc(sub)}</p>` : ""}
+    ${btns.join("")}
+    ${nextBtn}
+    <div class="mlinks"><button class="melink" data-a="menu">Table menu</button>${me.local ? '<button class="melink" data-a="add-sheet">Add player</button>' : ""}</div>
+  </div></div>`;
+  }
+  function showdownHTML(S, ui2, me) {
+    const h = S.hand;
+    const pots = h.pots || [];
+    if (ui2.pickKey !== String(h.no)) {
+      ui2.pickKey = String(h.no);
+      ui2.picks = pots.map(() => []);
+      ui2.split = false;
+    }
+    const total = pots.reduce((t, p) => t + p.amount, 0);
+    const multi = pots.length > 1 || ui2.split;
+    let body;
+    if (!multi) {
+      body = `<div class="mpick">${pots[0].eligible.map((id) => `<button class="abtn ink" data-a="win1" data-id="${esc(id)}" ${ui2.busy ? "disabled" : ""}>${ui2.pending === "win1:" + id ? busyHTML(void 0, 26) : esc(!me.local && id === me.id ? "ME" : UP(nameOf2(S, id)))}</button>`).join("")}</div>
+      <div class="mlinks"><button class="melink" data-a="split">Split the pot</button></div>`;
+    } else {
+      const ready = ui2.picks.length === pots.length && ui2.picks.every((w) => w.length);
+      body = pots.map((pot, i) => `<div class="mpot"><div class="lbl"><span>${pots.length > 1 ? i === 0 ? "MAIN POT" : "SIDE POT " + i : "TAP EVERY WINNER"}</span><span class="num">${money(pot.amount)}</span></div>
+        <div class="mpick">${pot.eligible.map((id) => `<button class="abtn ink ${ui2.picks[i] && ui2.picks[i].includes(id) ? "on" : ""}" data-a="pick" data-pot="${i}" data-id="${esc(id)}" aria-pressed="${!!(ui2.picks[i] && ui2.picks[i].includes(id))}">${esc(UP(nameOf2(S, id)))}</button>`).join("")}</div></div>`).join("") + `${pots.length > 1 ? '<p class="msub">Someone went all in for less, so there are side pots. Only players who matched the bet can win each one. Tap two names to split.</p>' : ""}
+      <button class="abtn ink mgo" id="b-award" data-a="award" ${ready && !ui2.busy ? "" : "disabled"}>${ui2.pending === "award" ? busyHTML("PAYING OUT…", 30) : `PAY ${ui2.picks.some((w) => w.length > 1) || pots.length > 1 ? "THE WINNERS" : "THE WINNER"}`}</button>
+      ${pots.length === 1 ? '<div class="mlinks"><button class="melink" data-a="split">One winner</button></div>' : ""}`;
+    }
+    return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"><div class="mcard">
+    <div class="mkick">SHOWDOWN</div>
+    <div class="px mtitle" id="m-title">WHO TOOK IT?</div>
+    <div class="px mamt num">${money(total)}</div>
+    ${h.runout ? '<p class="msub">Deal out the rest of the board first, then show hands.</p>' : ""}
+    ${body}
+    <div class="mlinks"><button class="melink" data-a="menu">Table menu</button></div>
+  </div></div>`;
+  }
+
+  // src/ui/views/table.ts
   var tableSkeleton = () => `<main class="tbl" id="tbl">
     <header class="thead">
       <button class="brandbtn" data-a="menu" aria-label="Table menu"><span class="mini-chip"><i></i></span><span class="px" style="font-size:20px;letter-spacing:.01em">CHIPWRECK</span></button>
@@ -2017,24 +2042,24 @@ input::placeholder { color: var(--placeholder); }
     <section class="tactions" id="actions"></section>
   </main>
   <div id="overlay"></div>`;
-  function renderTable() {
+  function renderTable(S, ui2, me, online) {
     if (mount("table", tableSkeleton())) observe("stage");
     const h = S.hand;
-    const actor = actorId();
-    const viewer = viewerId();
-    const vp = P(viewer);
+    const actor = actorId(S, ui2, me);
+    const viewer = viewerId(S, ui2, me);
+    const vp = playerOf(S, viewer);
     const myTurn = !!actor;
     document.getElementById("tbl").classList.toggle("wait", !myTurn);
     const key = actor ? `${h.no}|${h.street}|${actor}|${h.currentBet}` : "";
-    if (key !== ui.stageKey) {
-      ui.staged = [];
-      ui.confirmFold = false;
-      ui.stageKey = key;
+    if (key !== ui2.stageKey) {
+      ui2.staged = [];
+      ui2.confirmFold = false;
+      ui2.stageKey = key;
     }
-    const staged = ui.staged.reduce((a, b) => a + b, 0);
+    const staged = ui2.staged.reduce((a, b) => a + b, 0);
     patch("hHand", `HAND ${h ? h.no : Math.max(1, S.handNo + (S.lastResult ? 0 : 1))}`);
     patch("hBlinds", `$${S.settings.sb} / $${S.settings.bb}`);
-    const pot = potTotal2();
+    const pot = potTotal(S.hand);
     const groups = {};
     greedy(pot).forEach((v) => {
       groups[v] = (groups[v] || 0) + 1;
@@ -2045,23 +2070,23 @@ input::placeholder { color: var(--placeholder); }
     let turnText, turnBg = "var(--pine)", turnInk = "var(--linen)";
     if (h && h.street === "showdown") turnText = "SHOWDOWN";
     else if (h && h.toAct) {
-      if (isLocal() || h.toAct === meId()) {
-        turnText = isLocal() ? `${UP(nameOf2(h.toAct))}’S TURN` : "YOUR TURN";
+      if (me.local || h.toAct === me.id) {
+        turnText = me.local ? `${UP(nameOf2(S, h.toAct))}’S TURN` : "YOUR TURN";
         turnBg = "var(--mustard)";
         turnInk = "var(--ink)";
-      } else turnText = `${UP(nameOf2(h.toAct))}’S TURN`;
+      } else turnText = `${UP(nameOf2(S, h.toAct))}’S TURN`;
     } else turnText = S.lastResult ? "HAND OVER" : "WAITING TO DEAL";
     patch("turnPill", `<span style="display:contents">${esc(turnText)}</span>`);
     const tp = document.getElementById("turnPill");
     tp.style.background = turnBg;
     tp.style.color = turnInk;
     patch("streetPill", h ? STREET[h.street] : "BETWEEN HANDS");
-    patch("lastLine", esc(lastLine()));
-    const others = ringFrom(viewer);
+    patch("lastLine", esc(lastLine(S)));
+    const others = ringFrom(S, viewer);
     const pos = h ? positions(h) : {};
-    const live = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount();
-    patch("pcount", h ? `${live} IN HAND` : `${S.players.length} SEATED`);
-    patch("seats", others.length ? others.map((p) => seatHTML(p, pos[p.id])).join("") : `<div class="empty-seats">${isLocal() ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
+    const liveCount = h ? h.seats.filter((id) => !h.folded[id]).length : eligibleCount(S);
+    patch("pcount", h ? `${liveCount} IN HAND` : `${S.players.length} SEATED`);
+    patch("seats", others.length ? others.map((p) => seatHTML(S, me, online, p, pos[p.id])).join("") : `<div class="empty-seats">${me.local ? "Add players from the table menu." : `Nobody else yet. Share code ${esc(S.code)}.`}</div>`);
     const stack = vp ? vp.stack : 0;
     const avail = stack - staged;
     patch("avail", money(avail));
@@ -2070,7 +2095,7 @@ input::placeholder { color: var(--placeholder); }
       return `<div class="tchip ${ok ? "" : "no"}" data-chip="${c.v}" role="button" tabindex="${myTurn ? 0 : -1}" aria-label="Add ${c.label}" aria-disabled="${!ok}"><div>${stack3D(c, 3, SIZE.tray, { shadowH: 76, labelFn: (x) => `<span style="font-size:${x.v === 100 ? 17 : 20}px">${x.label}</span>` })}</div></div>`;
     }).join(""));
     const maxV = isMobile() ? 8 : 5;
-    const shown = ui.staged.slice(-maxV), n = shown.length, offset = ui.staged.length - n;
+    const shown = ui2.staged.slice(-maxV), n = shown.length, offset = ui2.staged.length - n;
     const stackH = n ? 68 + 20 * n : 0;
     let zone = "";
     if (!n) zone = `<div class="zhint">${myTurn ? "DRAG OR TAP CHIPS TO STACK YOUR PLAY" : "WAIT FOR YOUR TURN"}</div>`;
@@ -2081,45 +2106,23 @@ input::placeholder { color: var(--placeholder); }
     </div>`;
     }
     patch("zoneInner", zone);
-    patch("me", meHTML(viewer, myTurn));
+    patch("me", meHTML(S, ui2, me, viewer, myTurn));
     const wonMe = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === viewer);
     document.getElementById("me").classList.toggle("hot", myTurn || !!wonMe);
-    patch("actions", actionsHTML(actor, viewer, staged));
-    patch("overlay", overlayHTML());
+    patch("actions", actionsHTML(S, ui2, actor, viewer, staged));
+    patch("overlay", overlayHTML(S, ui2, me));
   }
-  function lastLine() {
-    const h = S.hand;
-    if (h && h.street === "showdown" && h.runout) return "All in. Deal out the rest of the board, then show hands.";
-    const l = S.log[S.log.length - 1] || "";
-    return l.replace(/\.$/, "");
-  }
-  function statusOf(p) {
-    const h = S.hand;
-    const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
-    const inHand = h && h.seats.includes(p.id);
-    if (won) return "Won the pot";
-    if (!inHand) return p.sittingOut ? "Sitting out" : p.stack === 0 ? "Busted" : h ? "Next hand" : "Ready";
-    if (h.folded[p.id]) return "Folded";
-    if (h.allIn[p.id]) return "All in";
-    if (h.toAct === p.id) return "Thinking…";
-    return h.last && h.last[p.id] || "Waiting";
-  }
-  function ringFrom(viewer) {
-    const list = S.players;
-    const i = viewer ? list.findIndex((p) => p.id === viewer) : -1;
-    return i < 0 ? list.slice() : list.slice(i + 1).concat(list.slice(0, i));
-  }
-  function seatHTML(p, pos) {
+  function seatHTML(S, me, online, p, pos) {
     const h = S.hand;
     const inHand = h && h.seats.includes(p.id);
-    const acting = h && h.toAct === p.id && h.street !== "showdown";
+    const acting2 = h && h.toAct === p.id && h.street !== "showdown";
     const won = !h && S.lastResult && S.lastResult.wins.some((w) => w.id === p.id);
     const dim = inHand && h.folded[p.id] || !inHand && (p.sittingOut || p.stack === 0);
     const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
     const bet = inHand ? h.bets[p.id] || 0 : 0;
-    let st = statusOf(p);
-    if (!isLocal() && online.size && !online.has(p.id) && !acting) st += " · away";
-    return `<button class="seat ${acting || won ? "hot" : ""} ${dim ? "dim" : ""}" data-a="player" data-id="${esc(p.id)}">
+    let st = statusOf(S, p);
+    if (!me.local && online.size && !online.has(p.id) && !acting2) st += " · away";
+    return `<button class="seat ${acting2 || won ? "hot" : ""} ${dim ? "dim" : ""}" data-a="player" data-id="${esc(p.id)}">
     ${avatarHTML(avatarColor(p.id), isDealer)}
     <div class="who">
       <div class="nmrow"><div class="nm">${esc(p.name)}</div>${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div>
@@ -2127,16 +2130,16 @@ input::placeholder { color: var(--placeholder); }
     <div class="money"><div class="bet px num">${money(bet)}</div><div class="of num">of ${money(p.stack)}</div></div>
   </button>`;
   }
-  function meHTML(viewer, myTurn) {
-    const p = P(viewer);
+  function meHTML(S, ui2, me, viewer, myTurn) {
+    const p = playerOf(S, viewer);
     if (!p) {
       return `<div class="merow">${avatarHTML("var(--ink)", false, "var(--mustard)")}<div><div class="px mename">YOU</div><div class="mesub">Not seated at this table</div></div></div>
       <button class="abtn ink sm" style="height:52px;font-size:20px;--drop:0px;box-shadow:none" data-a="sit-back">JOIN THIS TABLE</button>`;
     }
     const h = S.hand;
-    const isMe = !isLocal() && viewer === meId();
+    const isMe = !me.local && viewer === me.id;
     const inRound = h && h.seats.includes(p.id) ? h.bets[p.id] || 0 : 0;
-    const status = myTurn ? isMe ? "Your turn" : isLocal() ? "Your turn. Pass the phone after." : `Acting for ${p.name}` : statusOf(p);
+    const status = myTurn ? isMe ? "Your turn" : me.local ? "Your turn. Pass the phone after." : `Acting for ${p.name}` : statusOf(S, p);
     const isDealer = (h ? h.buttonId : S.buttonId) === p.id;
     const pos = h && h.seats.includes(p.id) ? positions(h)[p.id] : "";
     let posLine = "";
@@ -2147,137 +2150,56 @@ input::placeholder { color: var(--placeholder); }
       posLine = `<div class="mesub">${esc((isMe ? "You’re " : UP(p.name) + " is ") + positionName(pos) + tail)}</div>`;
     }
     let extra = "";
-    if (!isLocal() && amHost() && h && h.toAct && h.toAct !== meId() && h.street !== "showdown") {
-      extra = ui.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>' : `<button class="melink" data-a="act-for">Act for ${esc(nameOf2(h.toAct))} (phone died?)</button>`;
+    if (!me.local && amHost(S, me) && h && h.toAct && h.toAct !== me.id && h.street !== "showdown") {
+      extra = ui2.actFor ? '<button class="melink" data-a="stop-act">Stop acting for them</button>' : `<button class="melink" data-a="act-for">Act for ${esc(nameOf2(S, h.toAct))} (phone died?)</button>`;
     }
     return `<div class="merow">${avatarHTML("var(--ink)", isDealer, "var(--mustard)")}
       <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><div class="px mename">${isMe ? "YOU" : esc(UP(p.name))}${pos ? `<span class="pos">${esc(pos)}</span>` : ""}</div><div class="mesub">${esc(status)}</div>${posLine}</div></div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <div style="font-size:11px;font-weight:900;letter-spacing:.14em;color:var(--pine)">STACK</div>
-      <div class="px mestack num">${money(p.stack - (myTurn ? ui.staged.reduce((a, b) => a + b, 0) : 0))}</div>
+      <div class="px mestack num">${money(p.stack - (myTurn ? ui2.staged.reduce((a, b) => a + b, 0) : 0))}</div>
       <div class="mesub num">${money(inRound)} in this round</div>
       ${extra}
     </div>`;
   }
-  function playState(actor, staged) {
+  function actionsHTML(S, ui2, actor, viewer, staged) {
     const h = S.hand;
-    const L = actor ? legal(S, actor) : null;
-    if (!L || staged <= 0) return { label: "PLAY", ok: false };
-    const p = P(actor);
-    const to = L.mine + staged;
-    const allIn = staged === p.stack;
-    if (allIn) return { label: `PLAY ${money(staged)}`, ok: true, action: to > h.currentBet ? { type: "raise", to } : { type: "call" } };
-    if (to === h.currentBet && L.toCall > 0) return { label: `CALL ${money(staged)}`, ok: true, action: { type: "call" } };
-    if (to > h.currentBet && to >= L.minTo) return { label: `PLAY ${money(staged)}`, ok: true, action: { type: "raise", to } };
-    if (to < h.currentBet) return { label: `ADD ${money(h.currentBet - to)}`, ok: false, fill: h.currentBet };
-    return { label: `ADD ${money(L.minTo - to)}`, ok: false, fill: L.minTo };
-  }
-  function actionsHTML(actor, viewer, staged) {
-    const h = S.hand;
-    const vp = P(viewer);
+    const vp = playerOf(S, viewer);
     const mine = h && vp ? h.bets[viewer] || 0 : 0;
     const toCall = h && vp ? Math.max(0, Math.min(h.currentBet - mine, vp.stack)) : 0;
     const cc = toCall > 0 ? vp && toCall >= vp.stack ? `ALL IN ${money(toCall)}` : `CALL ${money(toCall)}` : "CHECK";
-    const ps = playState(actor, staged);
-    const dis = !actor || ui.busy ? "disabled" : "";
-    const bz = (tag, label) => ui.pending === tag ? busyHTML(void 0, 30) : label;
-    return `<button class="abtn linen fold ${ui.confirmFold ? "sure" : ""}" id="b-fold" data-a="fold" ${dis}>${bz("fold", ui.confirmFold ? "REALLY FOLD?" : "FOLD")}</button>
+    const ps = playState(S, actor, staged);
+    const dis = !actor || ui2.busy ? "disabled" : "";
+    const bz = (tag, label) => ui2.pending === tag ? busyHTML(void 0, 30) : label;
+    return `<button class="abtn linen fold ${ui2.confirmFold ? "sure" : ""}" id="b-fold" data-a="fold" ${dis}>${bz("fold", ui2.confirmFold ? "REALLY FOLD?" : "FOLD")}</button>
     <button class="abtn linen" id="b-call" data-a="checkcall" ${dis}>${bz("checkcall", cc)}</button>
     <button class="abtn linen" id="b-allin" data-a="allin" ${dis}>${bz("allin", "ALL IN")}</button>
     <button class="abtn play ${ps.ok ? "ok" : "no"}" id="b-play" data-a="play" ${dis}>${bz("play", ps.label)}</button>`;
   }
-  function overlayHTML() {
-    const h = S.hand;
-    if (h && h.street === "showdown") return showdownHTML();
-    if (h) return "";
-    const res = S.lastResult;
-    const canDeal = eligibleCount() >= 2;
-    const me = isLocal() ? null : P(meId());
-    let kicker, title, amount = null, sub = "";
-    if (res && res.wins.length) {
-      kicker = `HAND ${res.handNo}`;
-      amount = res.wins.reduce((t, w) => t + w.amount, 0);
-      if (res.wins.length === 1) title = !isLocal() && res.wins[0].id === meId() ? "YOU TAKE IT" : `${UP(nameOf2(res.wins[0].id))} TAKES IT`;
-      else {
-        title = "SPLIT POT";
-        sub = res.wins.map((w) => `${nameOf2(w.id)} ${money(w.amount)}`).join(" · ");
-      }
-    } else if (res) {
-      kicker = `HAND ${res.handNo}`;
-      title = "HAND OVER";
-      sub = "Uncalled chips went back.";
-    } else {
-      kicker = isLocal() ? "ONE PHONE TABLE" : `TABLE ${S.code}`;
-      title = "READY TO DEAL";
-      sub = "Seat order should match where people sit, clockwise. Change it from the table menu.";
-    }
-    const btns = [];
-    btns.push(`<button class="abtn ink mgo" id="b-deal" data-a="deal" ${canDeal && !ui.busy ? "" : "disabled"}>${ui.pending === "deal" ? busyHTML("DEALING…", 30) : canDeal ? res ? "DEAL NEXT HAND →" : "DEAL HAND 1 →" : "NEED 2 PLAYERS WITH CHIPS"}</button>`);
-    if (me && me.stack === 0) btns.push(`<button class="abtn pine mgo" data-a="rebuy-me">REBUY ${money(S.settings.startingStack)}</button>`);
-    if (!me && !isLocal()) btns.push('<button class="abtn pine mgo" data-a="sit-back">JOIN THIS TABLE</button>');
-    const nextBtn = canDeal ? `<p class="msub">${esc(nameOf2(S.buttonId))} has the button. Blinds go in automatically.</p>` : "";
-    return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"><div class="mcard">
-    <div class="mkick">${esc(kicker)}</div>
-    <div class="px mtitle" id="m-title">${esc(title)}</div>
-    ${amount != null ? `<div class="px mamt num">${money(amount)}</div>` : ""}
-    ${sub ? `<p class="msub">${esc(sub)}</p>` : ""}
-    ${btns.join("")}
-    ${nextBtn}
-    <div class="mlinks"><button class="melink" data-a="menu">Table menu</button>${isLocal() ? '<button class="melink" data-a="add-sheet">Add player</button>' : ""}</div>
-  </div></div>`;
-  }
-  function showdownHTML() {
-    const h = S.hand;
-    const pots = h.pots || [];
-    if (ui.pickKey !== String(h.no)) {
-      ui.pickKey = String(h.no);
-      ui.picks = pots.map(() => []);
-      ui.split = false;
-    }
-    const total = pots.reduce((t, p) => t + p.amount, 0);
-    const multi = pots.length > 1 || ui.split;
-    let body;
-    if (!multi) {
-      body = `<div class="mpick">${pots[0].eligible.map((id) => `<button class="abtn ink" data-a="win1" data-id="${esc(id)}" ${ui.busy ? "disabled" : ""}>${ui.pending === "win1:" + id ? busyHTML(void 0, 26) : esc(!isLocal() && id === meId() ? "ME" : UP(nameOf2(id)))}</button>`).join("")}</div>
-      <div class="mlinks"><button class="melink" data-a="split">Split the pot</button></div>`;
-    } else {
-      const ready = ui.picks.length === pots.length && ui.picks.every((w) => w.length);
-      body = pots.map((pot, i) => `<div class="mpot"><div class="lbl"><span>${pots.length > 1 ? i === 0 ? "MAIN POT" : "SIDE POT " + i : "TAP EVERY WINNER"}</span><span class="num">${money(pot.amount)}</span></div>
-        <div class="mpick">${pot.eligible.map((id) => `<button class="abtn ink ${ui.picks[i] && ui.picks[i].includes(id) ? "on" : ""}" data-a="pick" data-pot="${i}" data-id="${esc(id)}" aria-pressed="${!!(ui.picks[i] && ui.picks[i].includes(id))}">${esc(UP(nameOf2(id)))}</button>`).join("")}</div></div>`).join("") + `${pots.length > 1 ? '<p class="msub">Someone went all in for less, so there are side pots. Only players who matched the bet can win each one. Tap two names to split.</p>' : ""}
-      <button class="abtn ink mgo" id="b-award" data-a="award" ${ready && !ui.busy ? "" : "disabled"}>${ui.pending === "award" ? busyHTML("PAYING OUT…", 30) : `PAY ${ui.picks.some((w) => w.length > 1) || pots.length > 1 ? "THE WINNERS" : "THE WINNER"}`}</button>
-      ${pots.length === 1 ? '<div class="mlinks"><button class="melink" data-a="split">One winner</button></div>' : ""}`;
-    }
-    return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"><div class="mcard">
-    <div class="mkick">SHOWDOWN</div>
-    <div class="px mtitle" id="m-title">WHO TOOK IT?</div>
-    <div class="px mamt num">${money(total)}</div>
-    ${h.runout ? '<p class="msub">Deal out the rest of the board first, then show hands.</p>' : ""}
-    ${body}
-    <div class="mlinks"><button class="melink" data-a="menu">Table menu</button></div>
-  </div></div>`;
-  }
-  function sheetHTML() {
-    if (!ui.sheet) return "";
+
+  // src/ui/views/sheets.ts
+  function sheetHTML(S, ui2, me) {
+    if (!ui2.sheet) return "";
     let inner = "";
-    if (ui.sheet === "menu") inner = menuHTML();
-    else if (ui.sheet === "player") inner = playerSheetHTML();
-    else if (ui.sheet === "add") inner = `<h3>ADD PLAYER</h3><input id="in-add2" class="field" maxlength="18" placeholder="Name" value=""><button class="abtn mustard sm" data-a="add-player2">ADD WITH ${money(S.settings.startingStack)}</button>`;
+    if (ui2.sheet === "menu") inner = menuHTML(S, me);
+    else if (ui2.sheet === "player") inner = playerSheetHTML(S, ui2, me);
+    else if (ui2.sheet === "add") inner = `<h3>ADD PLAYER</h3><input id="in-add2" class="field" maxlength="18" placeholder="Name" value=""><button class="abtn mustard sm" data-a="add-player2">ADD WITH ${money(S.settings.startingStack)}</button>`;
     return `<div class="sheetwrap" data-a="close-sheet-bg"><div class="panel sheet" role="dialog" aria-modal="true">${inner}<button class="abtn off sm" data-a="close-sheet">CLOSE</button></div></div>`;
   }
-  function menuHTML() {
-    const host = amHost();
+  function menuHTML(S, me) {
+    const host = amHost(S, me);
     const rows = S.players.map((p) => {
-      const live = S.hand && S.hand.seats.includes(p.id) ? S.hand.committed[p.id] || 0 : 0;
-      const net_ = p.stack + live - p.buyIns * S.settings.startingStack;
-      return `<tr data-a="player" data-id="${esc(p.id)}"><td>${esc(p.name)}</td><td>${p.buyIns}×</td><td>${money(p.stack)}</td><td class="${net_ > 0 ? "pos" : net_ < 0 ? "neg" : ""}">${net_ > 0 ? "+" : ""}${money(net_).replace("$-", "-$")}</td></tr>`;
+      const live2 = S.hand && S.hand.seats.includes(p.id) ? S.hand.committed[p.id] || 0 : 0;
+      const net = p.stack + live2 - p.buyIns * S.settings.startingStack;
+      return `<tr data-a="player" data-id="${esc(p.id)}"><td>${esc(p.name)}</td><td>${p.buyIns}×</td><td>${money(p.stack)}</td><td class="${net > 0 ? "pos" : net < 0 ? "neg" : ""}">${net > 0 ? "+" : ""}${money(net).replace("$-", "-$")}</td></tr>`;
     }).join("");
-    const peer = backend.kind === "peer";
-    return `<h3>${isLocal() ? "ONE PHONE TABLE" : "TABLE " + esc(S.code)}</h3>
-    ${!isLocal() ? `<p class="note">Friends join with code <b style="color:var(--mustard)">${esc(S.code)}</b>.${peer ? " Keep the host’s phone awake with ChipWreck open." : ""}</p>
+    const peer = me.kind === "peer";
+    return `<h3>${me.local ? "ONE PHONE TABLE" : "TABLE " + esc(S.code)}</h3>
+    ${!me.local ? `<p class="note">Friends join with code <b style="color:var(--mustard)">${esc(S.code)}</b>.${peer ? " Keep the host’s phone awake with ChipWreck open." : ""}</p>
       <div class="sgrid"><button class="abtn pine" data-a="copy-code">COPY CODE</button>${peer ? '<button class="abtn pine" data-a="copy-link">COPY LINK</button>' : ""}</div>` : ""}
     <h4 class="lbl">Players · tap to manage</h4>
     <div style="overflow-x:auto"><table class="ledger"><thead><tr><th>PLAYER</th><th>BUY-INS</th><th>STACK</th><th>NET</th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${isLocal() && !S.hand ? '<button class="abtn pine sm" data-a="add-sheet">ADD PLAYER</button>' : ""}
+    ${me.local && !S.hand ? '<button class="abtn pine sm" data-a="add-sheet">ADD PLAYER</button>' : ""}
     ${host ? `<h4 class="lbl">Blinds and buy-in</h4>
       <div class="three">
         <input id="in-s-stack" class="field" inputmode="numeric" aria-label="Buy-in" value="${S.settings.startingStack}">
@@ -2288,13 +2210,13 @@ input::placeholder { color: var(--placeholder); }
       <button class="abtn pine" data-a="undo" ${S.history && S.history.length ? "" : "disabled"}>UNDO LAST</button></div>` : ""}
     <h4 class="lbl">What happened</h4>
     <div class="logbox">${S.log.slice().reverse().map((l) => `<div>${esc(l)}</div>`).join("") || "<div>Nothing yet.</div>"}</div>
-    <button class="abtn brick sm" data-a="leave">${isLocal() ? "BACK TO START (SAVED)" : "LEAVE TABLE"}</button>`;
+    <button class="abtn brick sm" data-a="leave">${me.local ? "BACK TO START (SAVED)" : "LEAVE TABLE"}</button>`;
   }
-  function playerSheetHTML() {
-    const p = P(ui.sheetPlayer);
+  function playerSheetHTML(S, ui2, me) {
+    const p = playerOf(S, ui2.sheetPlayer);
     if (!p) return "<h3>PLAYER LEFT</h3>";
-    const self = p.id === meId() || isLocal();
-    const host = amHost();
+    const self = p.id === me.id || me.local;
+    const host = amHost(S, me);
     const inHand = S.hand && S.hand.seats.includes(p.id);
     const between = !S.hand;
     const b = [];
@@ -2308,34 +2230,181 @@ input::placeholder { color: var(--placeholder); }
     return `<h3>${esc(UP(p.name))}</h3><p class="note">Stack ${money(p.stack)} · ${p.buyIns} buy-in${p.buyIns > 1 ? "s" : ""}</p>
     ${b.length ? `<div class="sgrid">${b.join("")}</div>` : '<p class="note">Seat changes open up between hands.</p>'}
     ${host && between ? `<label class="flabel"><span class="lbl">Fix their stack</span><div class="addrow"><input id="in-adj" class="field" inputmode="numeric" value="${p.stack}"><button class="abtn pine" data-a="pa" data-k="adjust">SAVE</button></div></label>` : ""}
-    ${(self || host) && !inHand ? `<button class="abtn ${ui.confirmRemove ? "brick" : "off"} sm" data-a="pa" data-k="remove">${ui.confirmRemove ? "TAP AGAIN TO REMOVE" : "REMOVE FROM TABLE"}</button>` : ""}`;
+    ${(self || host) && !inHand ? `<button class="abtn ${ui2.confirmRemove ? "brick" : "off"} sm" data-a="pa" data-k="remove">${ui2.confirmRemove ? "TAP AGAIN TO REMOVE" : "REMOVE FROM TABLE"}</button>` : ""}`;
   }
-  function popAt(layerId, text, top, size) {
-    const layer = document.getElementById(layerId);
-    if (!layer) return;
-    const el = document.createElement("div");
-    el.className = "pop";
-    el.style.top = top;
-    el.style.fontSize = size + "px";
-    el.textContent = text;
-    layer.appendChild(el);
-    setTimeout(() => el.remove(), 950);
+
+  // src/ui/render.ts
+  function render() {
+    const S = live.S, me = device();
+    if (!S) renderLobbyForm(ui, live.net);
+    else if (ui.view === "room") renderRoom(S, ui, me, live.online, live.net);
+    else renderTable(S, ui, me, live.online);
+    patch("sheet", S ? sheetHTML(S, ui, me) : "");
   }
-  var STREET_MS = 1500;
-  function announceStreet(c) {
-    const layer = document.getElementById("announce");
-    if (!layer) return;
-    layer.textContent = "";
-    const el = document.createElement("div");
-    el.className = "ann";
-    el.innerHTML = `<b>${esc(STREET[c.street])}</b><span>${esc(c.hint)}</span>`;
-    layer.appendChild(el);
-    setTimeout(() => el.remove(), STREET_MS);
+
+  // src/ui/session.ts
+  function boot() {
+    const hash = (location.hash || "").replace("#", "").toUpperCase();
+    if (/^[A-Z0-9]{4}$/.test(hash)) ui.code = hash;
+    pickBackend().then((b) => {
+      live.net = b;
+      render();
+    }).catch((e) => {
+      ui.homeNote = e.message;
+      render();
+    });
+    render();
   }
+  var unsub = null;
+  function attach(b) {
+    if (unsub) unsub();
+    live.backend = b;
+    let lastTurn = null;
+    let lastPos = null;
+    const u1 = b.onState((s) => {
+      live.S = s;
+      if (ui.view === "auto") ui.view = s.handNo > 0 || s.hand ? "table" : "room";
+      else if (ui.view === "room" && s.hand) ui.view = "table";
+      const me = device();
+      const turn = s.hand && s.hand.toAct;
+      if (turn && turn !== lastTurn && turn === me.id && !me.local) buzz([60, 40, 60]);
+      lastTurn = turn;
+      const change = streetChange(lastPos, s.hand);
+      lastPos = s.hand ? { no: s.hand.no, street: s.hand.street } : null;
+      trackPot();
+      render();
+      if (change) announceStreet(change);
+    });
+    const u2 = b.onOnline ? b.onOnline((set) => {
+      live.online = set;
+      render();
+    }) : () => {
+    };
+    unsub = () => {
+      u1();
+      u2();
+    };
+  }
+  var lastPot = null;
+  var lastPotHand = null;
+  function trackPot() {
+    const h = live.S.hand;
+    if (!h || h.street === "showdown") {
+      lastPot = null;
+      return;
+    }
+    const pot = potTotal(h);
+    if (lastPot != null && lastPotHand === h.no && pot > lastPot) popAt("potPops", "+" + money(pot - lastPot), "30%", 44);
+    lastPot = pot;
+    lastPotHand = h.no;
+  }
+  async function send(action, tag) {
+    if (ui.busy) return false;
+    ui.busy = true;
+    ui.pending = tag ?? null;
+    render();
+    try {
+      await live.backend.submit(action);
+      return true;
+    } catch (e) {
+      toast(e.message, true);
+      return false;
+    } finally {
+      ui.busy = false;
+      ui.pending = null;
+      render();
+    }
+  }
+  function lobbyError(msg) {
+    ui.err = msg;
+    ui.busy = false;
+    render();
+  }
+  async function submitLobby(local) {
+    const name = ui.name.trim();
+    if (!local && ui.tab === "join" && ui.code.length !== 4) return lobbyError("Table codes are 4 characters.");
+    if (!name) return lobbyError("Add your name so the table knows who you are.");
+    if (!local && !live.net) return lobbyError(ui.homeNote || "Still connecting. Try again in a second.");
+    ui.err = "";
+    ui.busy = true;
+    render();
+    store.set("chipstack:name", name);
+    try {
+      if (local || ui.tab === "create") {
+        const [sb, bb] = BLIND_OPTS[ui.blinds];
+        const b = local ? await new LocalBackend().init() : live.net;
+        const code = await b.create({ startingStack: ui.stack, sb, bb }, name);
+        if (!local) store.set("chipstack:last", code);
+        ui.view = "room";
+        attach(b);
+      } else {
+        await openTable(ui.code, name);
+      }
+    } catch (e) {
+      ui.view = "lobby";
+      live.S = NO_TABLE;
+      lobbyError(e.message);
+      return;
+    }
+    ui.busy = false;
+    render();
+  }
+  async function openTable(code, name) {
+    const b = live.net;
+    await b.open(code);
+    store.set("chipstack:last", code);
+    ui.view = "auto";
+    attach(b);
+    if (!b.state.players.some((p) => p.id === b.me.id)) await b.submit({ type: "join", name });
+  }
+  async function rejoin(code) {
+    const name = ui.name.trim();
+    if (!name) return lobbyError("Add your name so the table knows who you are.");
+    if (!live.net) return lobbyError("Still connecting. Try again in a second.");
+    ui.err = "";
+    ui.busy = true;
+    render();
+    store.set("chipstack:name", name);
+    try {
+      await openTable(code, name);
+    } catch (e) {
+      ui.view = "lobby";
+      live.S = NO_TABLE;
+      return lobbyError(e.message);
+    }
+    ui.busy = false;
+    render();
+  }
+  async function continueLocal() {
+    try {
+      const b = new LocalBackend();
+      await b.open();
+      ui.view = "auto";
+      attach(b);
+    } catch (e) {
+      lobbyError(e.message);
+    }
+  }
+  function leaveToLobby() {
+    const b = live.backend;
+    if (b && b.kind !== "local" && b.close) b.close();
+    if (unsub) unsub();
+    unsub = null;
+    live.backend = null;
+    live.S = NO_TABLE;
+    ui.view = "lobby";
+    ui.sheet = null;
+    ui.actFor = false;
+    ui.staged = [];
+    render();
+  }
+
+  // src/ui/events.ts
+  var acting = () => live.S ? actorId(live.S, ui, device()) : null;
   function addChip(v) {
-    const actor = actorId();
+    const actor = acting();
     if (!actor) return;
-    const p = P(actor);
+    const p = playerOf(live.S, actor);
     const sum = ui.staged.reduce((a, b) => a + b, 0);
     if (sum + v > p.stack) return;
     ui.staged.push(v);
@@ -2344,9 +2413,10 @@ input::placeholder { color: var(--placeholder); }
     popAt("zonePops", "+$" + v, "40%", 40);
   }
   function startDrag(e, v, source, idx) {
-    if (!actorId()) return;
+    const actor = acting();
+    if (!actor) return;
     if (source === "tray") {
-      const p = P(actorId());
+      const p = playerOf(live.S, actor);
       if (v > p.stack - ui.staged.reduce((a, b) => a + b, 0)) return;
     }
     e.preventDefault();
@@ -2389,6 +2459,7 @@ input::placeholder { color: var(--placeholder); }
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
   }
+  document.addEventListener("pointerdown", keepAwake, { passive: true });
   document.addEventListener("pointerdown", (e) => {
     const target = e.target;
     if (!target) return;
@@ -2407,7 +2478,7 @@ input::placeholder { color: var(--placeholder); }
     }
     const id = target ? target.id : "";
     if (e.key === "Enter" && id === "in-code") submitLobby(false);
-    if (e.key === "Enter" && id === "in-name" && !S) submitLobby(false);
+    if (e.key === "Enter" && id === "in-name" && !live.S) submitLobby(false);
     if (e.key === "Enter" && id === "in-add") addLocalPlayer("in-add");
     if (e.key === "Enter" && id === "in-add2") addLocalPlayer("in-add2");
     if (e.key === "Escape" && ui.sheet) {
@@ -2423,42 +2494,17 @@ input::placeholder { color: var(--placeholder); }
       ui.code = v;
       ui.err = "";
       cache.delete("lpanel");
-      refreshSubmit();
+      refreshSubmit(ui);
     } else if (t.id === "in-name") {
       ui.name = t.value.slice(0, 18);
       ui.err = "";
       cache.delete("lpanel");
-      refreshSubmit();
+      refreshSubmit(ui);
     } else if (t.id === "in-add") {
       ui.addName = t.value;
       cache.delete("rpanel");
     }
   });
-  async function addLocalPlayer(inputId) {
-    const el = document.getElementById(inputId);
-    const n = (el && el.value || "").trim();
-    if (!n) return toast("Type a name first", true);
-    const ok = await send({ type: "join", by: "l" + rid(), name: n });
-    if (ok) {
-      ui.addName = "";
-      cache.delete("rpanel");
-      if (inputId === "in-add2") ui.sheet = null;
-      render();
-      const i = document.getElementById(inputId);
-      if (i) {
-        i.value = "";
-        i.focus();
-      }
-    }
-  }
-  function copy(text, label) {
-    const done = () => toast("Copied " + (label || text));
-    try {
-      navigator.clipboard.writeText(text).then(done, () => toast(label ? text : "Code: " + text));
-    } catch (e) {
-      toast("Code: " + text);
-    }
-  }
   document.addEventListener("click", (e) => {
     const el = e.target?.closest("[data-a]");
     if (!el) return;
@@ -2471,8 +2517,9 @@ input::placeholder { color: var(--placeholder); }
       return;
     }
     if (el.disabled) return;
+    const S = live.S;
     const h = S && S.hand;
-    const actor = S && actorId();
+    const actor = acting();
     switch (a) {
       // lobby
       case "tab":
@@ -2581,7 +2628,7 @@ input::placeholder { color: var(--placeholder); }
         break;
       case "play": {
         if (!actor) break;
-        const ps = playState(actor, ui.staged.reduce((x, y) => x + y, 0));
+        const ps = playState(S, actor, ui.staged.reduce((x, y) => x + y, 0));
         if (ps.ok) send({ ...ps.action, player: actor }, "play");
         else if (ps.fill) {
           const L = legal(S, actor);
@@ -2638,9 +2685,16 @@ input::placeholder { color: var(--placeholder); }
         break;
     }
   });
+  var rz;
+  window.addEventListener("resize", () => {
+    clearTimeout(rz);
+    rz = setTimeout(() => {
+      if (live.S && ui.view === "table") render();
+    }, 120);
+  });
   function playerAction(kind) {
     const id = ui.sheetPlayer;
-    const p = P(id);
+    const p = playerOf(live.S, id);
     if (!p) return;
     if (kind === "remove") {
       if (!ui.confirmRemove) {
@@ -2650,8 +2704,9 @@ input::placeholder { color: var(--placeholder); }
       }
       ui.confirmRemove = false;
       ui.sheet = null;
+      const me = device();
       send({ type: "leave", player: id }).then((ok) => {
-        if (ok && id === meId() && !isLocal()) leaveToLobby();
+        if (ok && id === me.id && !me.local) leaveToLobby();
       });
       return;
     }
@@ -2666,13 +2721,33 @@ input::placeholder { color: var(--placeholder); }
     };
     send(map[kind]);
   }
-  var rz;
-  window.addEventListener("resize", () => {
-    clearTimeout(rz);
-    rz = setTimeout(() => {
-      if (S && ui.view === "table") render();
-    }, 120);
-  });
+  async function addLocalPlayer(inputId) {
+    const el = document.getElementById(inputId);
+    const n = (el && el.value || "").trim();
+    if (!n) return toast("Type a name first", true);
+    const ok = await send({ type: "join", by: "l" + rid(), name: n });
+    if (ok) {
+      ui.addName = "";
+      cache.delete("rpanel");
+      if (inputId === "in-add2") ui.sheet = null;
+      render();
+      const i = document.getElementById(inputId);
+      if (i) {
+        i.value = "";
+        i.focus();
+      }
+    }
+  }
+  function copy(text, label) {
+    const done = () => toast("Copied " + (label || text));
+    try {
+      navigator.clipboard.writeText(text).then(done, () => toast(label ? text : "Code: " + text));
+    } catch (e) {
+      toast("Code: " + text);
+    }
+  }
+
+  // src/app.ts
   var start = () => boot();
   if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start);
   else start();

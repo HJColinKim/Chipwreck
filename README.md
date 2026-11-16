@@ -32,21 +32,48 @@ The page picks a sync backend at runtime:
 | Anywhere else (GitHub Pages, any static host) | Public MQTT brokers (EMQX, HiveMQ, Mosquitto) | The host's phone runs the game; messages go through all reachable brokers at once |
 | One-phone mode | Browser storage | No network needed |
 
-All backends run the same pure reducer (`src/engine.ts`), so the rules are identical everywhere.
+All backends run the same pure reducer (`src/engine/`), so the rules are identical everywhere.
 
 ## Project layout
 
 ```
 src/types.ts       domain types: TableState, Hand, Action union — the persisted shape
-src/engine.ts      pure game reducer (no DOM) — all betting rules live here
-src/transport.ts   sync backends: ClaudeBackend, PeerBackend, LocalBackend (all implement Backend)
-src/app.ts         UI: lobby, waiting room, table, modals (component HTML builders)
+src/engine/        pure game rules (no DOM, no I/O)
+  index.ts           the engine's public surface; nothing outside reaches past it
+  core.ts            street order, coercion, table lookups, the log
+  table.ts           creating a table, validating settings, seating players
+  pots.ts            pot and side-pot maths
+  hand.ts            dealing, action order, closing streets, payouts
+  betting.ts         fold / check / call / raise
+  reduce.ts          the reducer: table administration plus dispatch into the above
+  views.ts           read-only derivations for the UI (legal moves, positions, streets)
+src/transport/     sync backends, all implementing Backend
+  index.ts           public surface; pickBackend() chooses one for wherever the page runs
+  backend.ts         the Backend contract and the shared state fan-out (Emitter)
+  storage.ts         localStorage / sessionStorage, wrapped so a refusal never throws
+  relay.ts           the multi-broker MQTT link PeerBackend speaks over
+  claude.ts          ClaudeBackend: shared artifact db doc + room pokes
+  peer.ts            PeerBackend: the host's phone runs the game, brokers relay
+  local.ts           LocalBackend: one phone, stored in this browser
+src/ui/            screens, UI state and events
+  state.ts           the UI's mutable state: `ui`, the open table, this device
+  render.ts          the one entry point that repaints the screen
+  session.ts         boot, create/join/leave, submitting actions
+  events.ts          every listener: chip drags, keyboard, one delegated click handler
+  selectors.ts       pure view-model: whose turn, seat order, what PLAY does
+  dom.ts             mount/patch, artboard scaling, toast, pops, wake lock
+  theme.ts           chip set, geometry, palettes, lobby options
+  chips.ts           chips and stacks drawn in HTML
+  scene.ts           dealer, felt, board and avatars
+  format.ts          esc / money / uppercase
+  views/             lobby.ts, room.ts, table.ts, overlay.ts, sheets.ts
+src/app.ts         entry point: starts the UI
 src/externals.d.ts declarations for the claude.ai artifact host and mqtt.js
 src/shell.html     theme tokens, fonts, component styles, swirl background + CRT overlay
 src/manifest.webmanifest   web app manifest, copied into docs/ by the build
 build.js           esbuild bundles src/app.ts into dist/artifact.html and docs/index.html
 tools/make-icons.js        one-shot generator for the docs/ homescreen icons
-test/              engine + asset unit tests (node:test) and two Playwright smoke tests
+test/              engine, selector and asset unit tests (node:test) and two Playwright smoke tests
 ```
 
 TypeScript throughout, with two devDependencies: esbuild (bundling) and typescript
